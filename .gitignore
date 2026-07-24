@@ -1,0 +1,24 @@
+# Build artifacts
+/bin/
+/dist/
+/hs
+/hugo-site-cli
+*.exe
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Local reports and Hugo output
+/data.csv
+/public/
+/resources/_gen/
+
+# Local configuration and editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local hs policy may include site-specific paths or thresholds.
+.hs.toml
