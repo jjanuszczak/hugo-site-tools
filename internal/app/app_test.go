@@ -108,6 +108,20 @@ func TestContentListSearchStatsAndWrite(t *testing.T) {
 	if !strings.Contains(list.String(), `"url":"/articles/one/"`) || !strings.Contains(list.String(), `"draft":true`) {
 		t.Fatalf("list = %s", list.String())
 	}
+	list.Reset()
+	if err := run([]string{"content", "list", site, "--draft", "true"}, &list, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(list.String(), "Research note") || strings.Contains(list.String(), "Fintech note") {
+		t.Fatalf("draft list = %s", list.String())
+	}
+	list.Reset()
+	if err := run([]string{"content", "list", site, "--draft", "false"}, &list, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(list.String(), "Fintech note") || strings.Contains(list.String(), "Research note") {
+		t.Fatalf("published list = %s", list.String())
+	}
 	var search bytes.Buffer
 	if err := run([]string{"content", "search", "fintech", site, "--section", "articles"}, &search, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
@@ -135,6 +149,139 @@ func TestContentListSearchStatsAndWrite(t *testing.T) {
 	}
 	if !strings.Contains(string(page), "draft: true") || !strings.Contains(string(page), "hs_stats: true") {
 		t.Fatalf("page = %s", page)
+	}
+}
+
+func TestTUIContentFilterAndProjectParsing(t *testing.T) {
+	site := t.TempDir()
+	writePost(t, filepath.Join(site, "content", "published.md"), "---\ntitle: Published\ndate: 2026-01-01\ncategories: [Guides]\ndraft: false\n---\nbody")
+	writePost(t, filepath.Join(site, "content", "draft.md"), "---\ntitle: Draft\ndate: 2026-02-01\ncategories: [Notes]\ndraft: true\n---\nbody")
+	project, err := tuiProject([]string{site})
+	if err != nil || project != site {
+		t.Fatalf("tuiProject = %q, %v", project, err)
+	}
+	m := newTUIModel(project)
+	m.loadContent()
+	m.draftFilter = 1
+	if items := m.filteredItems(); len(items) != 1 || items[0].Title != "Draft" {
+		t.Fatalf("draft items = %#v", items)
+	}
+	m.draftFilter = 2
+	if items := m.filteredItems(); len(items) != 1 || items[0].Title != "Published" {
+		t.Fatalf("published items = %#v", items)
+	}
+	if view := m.contentView(); !strings.Contains(view, "Posts: 1 | Words: 1 | Avg: 1 words/post") || !strings.Contains(view, "1 words  Published") {
+		t.Fatalf("content stats = %s", view)
+	}
+	m.draftFilter = 0
+	m.query = "open finance"
+	for i := range m.items {
+		if m.items[i].Title == "Published" {
+			m.items[i].Tags = []string{"Open Finance"}
+		}
+	}
+	if items := m.filteredItems(); len(items) != 1 || items[0].Title != "Published" {
+		t.Fatalf("search items = %#v", items)
+	}
+	m.query = ""
+	m.section = "missing"
+	if items := m.filteredItems(); len(items) != 0 {
+		t.Fatalf("section items = %#v", items)
+	}
+	m.section = ""
+	m.category = "Guides"
+	if items := m.filteredItems(); len(items) != 1 || items[0].Title != "Published" {
+		t.Fatalf("category items = %#v", items)
+	}
+	m.category = ""
+	m.from, m.to = "2026-02-01", "2026-02-01"
+	if items := m.filteredItems(); len(items) != 1 || items[0].Title != "Draft" {
+		t.Fatalf("date items = %#v", items)
+	}
+}
+
+func TestTUIShowsCommandResultAfterRunning(t *testing.T) {
+	m := newTUIModel(t.TempDir())
+	m.running = true
+	updated, _ := m.Update(tuiCommandResult{output: "Build: success"})
+	result := updated.(tuiModel)
+	if result.running || result.result != "Build: success" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestTUIOpensSelectedContentSource(t *testing.T) {
+	site := t.TempDir()
+	path := filepath.Join(site, "content", "entry.md")
+	writePost(t, path, "---\ntitle: Entry\n---\nsource body")
+	m := newTUIModel(site)
+	m.loadContent()
+	m.openContent(m.items[0])
+	if m.screen != tuiPreview || !strings.Contains(m.previewText, "title: Entry") || !strings.Contains(m.previewText, "source body") {
+		t.Fatalf("preview = %#v", m)
+	}
+}
+
+func TestTUIStartsDoctorForSelectedContent(t *testing.T) {
+	m := newTUIModel(t.TempDir())
+	m.screen = tuiContent
+	m.items = []contentItem{{Source: "content/entry.md"}}
+	updated, command := m.updateContent("d")
+	result := updated.(tuiModel)
+	if command == nil || !result.running || result.screen != tuiResult || !strings.Contains(result.command, "--only content --source content/entry.md") {
+		t.Fatalf("result = %#v, command = %#v", result, command)
+	}
+}
+
+func TestTUIShowsURLForSelectedContent(t *testing.T) {
+	site := t.TempDir()
+	if err := os.WriteFile(filepath.Join(site, "hugo.toml"), []byte(`baseURL = "https://example.test/site/"`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m := newTUIModel(site)
+	m.screen = tuiContent
+	m.items = []contentItem{{URL: "https://elsewhere.test/", GeneratedURL: "/articles/entry/"}}
+	updated, _ := m.updateContent("u")
+	result := updated.(tuiModel)
+	if result.screen != tuiURL || result.selectedURL != "https://example.test/site/articles/entry/" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestTUIPageNavigation(t *testing.T) {
+	m := newTUIModel(t.TempDir())
+	m.height = 12
+	m.screen = tuiContent
+	m.items = make([]contentItem, 20)
+	updated, _ := m.updateContent("pgdown")
+	result := updated.(tuiModel)
+	if result.contentCursor != result.contentHeight() {
+		t.Fatalf("page down cursor = %d", result.contentCursor)
+	}
+	updated, _ = result.updateContent("end")
+	result = updated.(tuiModel)
+	if result.contentCursor != 19 {
+		t.Fatalf("end cursor = %d", result.contentCursor)
+	}
+	updated, _ = result.updateContent("home")
+	result = updated.(tuiModel)
+	if result.contentCursor != 0 {
+		t.Fatalf("home cursor = %d", result.contentCursor)
+	}
+
+	m = newTUIModel(t.TempDir())
+	m.height = 12
+	m.screen = tuiPreview
+	m.previewText = strings.Repeat("line\n", 20)
+	updated, _ = m.updatePreview("space")
+	result = updated.(tuiModel)
+	if result.previewOffset != result.previewHeight() {
+		t.Fatalf("preview page down offset = %d", result.previewOffset)
+	}
+	updated, _ = result.updatePreview("end")
+	result = updated.(tuiModel)
+	if result.previewOffset == 0 {
+		t.Fatalf("preview end offset = %d", result.previewOffset)
 	}
 }
 
@@ -250,6 +397,21 @@ func TestDoctorContentDoesNotRequireDateForSectionIndex(t *testing.T) {
 	}
 }
 
+func TestDoctorContentCanTargetOneSource(t *testing.T) {
+	site := t.TempDir()
+	writePost(t, filepath.Join(site, "content", "selected.md"), "---\n---\nbody")
+	writePost(t, filepath.Join(site, "content", "other.md"), "---\n---\nbody")
+	findings := doctorContent(site, "content/selected.md")
+	if len(findings) != 2 {
+		t.Fatalf("findings = %#v", findings)
+	}
+	for _, finding := range findings {
+		if finding.Source != "content/selected.md" {
+			t.Fatalf("finding targets %q, want selected source", finding.Source)
+		}
+	}
+}
+
 func TestBuildReportsProductionOutput(t *testing.T) {
 	site := t.TempDir()
 	if err := os.WriteFile(filepath.Join(site, "hugo.toml"), []byte("baseURL = 'https://example.test/'"), 0644); err != nil {
@@ -332,6 +494,33 @@ printf '%s' '<!doctype html><html><head><title>Home</title><meta name="descripti
 	}
 	if !strings.Contains(out.String(), `"HS-LINK-001"`) || !strings.Contains(out.String(), `"target":"/missing/"`) {
 		t.Fatalf("unexpected report: %s", out.String())
+	}
+}
+
+func TestAuditSEOAndLinksReuseDoctorChecks(t *testing.T) {
+	site := t.TempDir()
+	if err := os.WriteFile(filepath.Join(site, "hugo.toml"), []byte("baseURL = 'https://example.test/'"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	installFakeHugo(t, `
+mkdir -p "$dest"
+printf '%s' '<!doctype html><html><head><title>Home</title><link rel="canonical" href="https://example.test/"></head><body><a href="/missing/">broken</a></body></html>' > "$dest/index.html"
+`)
+	var out bytes.Buffer
+	if err := run([]string{"audit", "seo", site, "--format", "json"}, &out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"HS-SEO-002"`) {
+		t.Fatalf("SEO audit did not report missing description: %s", out.String())
+	}
+	out.Reset()
+	err := run([]string{"audit", "links", site, "--format", "json"}, &out, &bytes.Buffer{})
+	var status *exitError
+	if !errors.As(err, &status) || status.code != 1 {
+		t.Fatalf("err = %#v, want exit 1", err)
+	}
+	if !strings.Contains(out.String(), `"HS-LINK-001"`) {
+		t.Fatalf("links audit did not report broken link: %s", out.String())
 	}
 }
 

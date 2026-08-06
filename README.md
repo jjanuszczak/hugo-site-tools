@@ -24,8 +24,10 @@ hs search "market entry"
 
 # Inspect a local Hugo project.
 hs content list .
+hs content list . --draft true
 hs content search fintech . --section articles --tag "Open Finance"
 hs content stats .
+hs tui .
 hs build .
 hs urls .
 hs doctor .
@@ -55,11 +57,39 @@ home = ["HTML", "RSS", "JSON"]
 ```sh
 hs posts /path/to/hugo-site
 hs posts /path/to/hugo-site --verbose
+hs content list . --format json
+hs content list . --draft true
+hs content list . --draft false
+hs content search fintech . --section articles --tag "Open Finance" --draft false
+hs tui .
 hs content new "A new post" . --section articles --tag Fintech --draft
 hs content stats . --write --draft --output private/site-stats
 ```
 
-`posts` reads YAML, TOML, and JSON front matter. `content` commands understand the project's configured `contentDir` and content-targeted Hugo module mounts. `content stats --write` creates `data/site-stats.json` and a draft generated-page stub by default.
+`posts` reads YAML, TOML, and JSON front matter. `content list` includes draft state, word count, and generated path; its JSON output also includes each source path. `--draft true|false` narrows the list without requiring a search query. `content search` accepts section, tag, draft, and date-range filters. All content commands understand the project's configured `contentDir` and content-targeted Hugo module mounts. `content stats --write` creates `data/site-stats.json` and a draft generated-page stub by default.
+
+### Use the interactive terminal UI
+
+`hs tui [site-directory]` opens an arrow-key interface for content work and release checks. The content browser shows the active result-set statistics, per-article word counts, and filters for draft state, section, category, tag, and date range.
+
+```sh
+./bin/hs tui /path/to/hugo-site
+```
+
+| Key | Action |
+| --- | --- |
+| `/` | Search content title, tags, and body text. |
+| `f` / `c` | Open filters / clear search and filters. |
+| `Enter` | Read the selected Markdown source, including front matter. |
+| `d` | Run the content doctor against the selected source file only. |
+| `u` | Show the selected post's URL, built from Hugo's `baseURL` and generated path. |
+| `r` | Refresh local content. |
+| `Esc` | Return to the previous screen. |
+| `q` | Quit, except while typing a search or filter value. |
+
+In the filter screen, use left/right to choose known sections, categories, and tags, or Enter to type an exact value. Date filters use `YYYY-MM-DD`.
+
+Use PgUp/PgDown to move by a page through lists and text, Home/End to jump to the first or last item, and Space as PgDown. While typing a search or filter value, Space enters a space character.
 
 ### Build for release
 
@@ -93,9 +123,21 @@ hs doctor . --strict
 hs doctor . --format json
 hs doctor . --format sarif
 hs doctor . --build-drafts --build-future
+# Check only one content source file.
+hs doctor . --only content --source content/articles/example.md
 ```
 
-Warnings do not fail the command unless you pass `--strict`. Errors return exit code 1, invalid arguments return 2, and an unavailable Hugo executable or unreadable project returns 3. Remote auditing is planned but not yet implemented.
+Warnings do not fail the command unless you pass `--strict`. `--source` requires `--only content`. Errors return exit code 1, invalid arguments return 2, and an unavailable Hugo executable or unreadable project returns 3. Remote auditing is planned but not yet implemented.
+
+### Run focused audits
+
+Use focused reports when you need one category of release feedback. Both commands build into a temporary production directory and support text, JSON, and SARIF output.
+
+```sh
+hs audit seo .
+hs audit links . --strict
+hs audit seo . --format json
+```
 
 ## Development
 

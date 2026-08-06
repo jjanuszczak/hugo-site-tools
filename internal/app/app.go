@@ -76,6 +76,7 @@ func (e *exitError) Error() string { return e.message }
 type DoctorOptions struct {
 	ProjectDir  string
 	Only        []string
+	Source      string
 	Strict      bool
 	Format      string
 	BuildDrafts bool
@@ -179,6 +180,10 @@ func run(args []string, out, errOut io.Writer) error {
 		return runPosts(args[1:], out)
 	case "content":
 		return runContent(args[1:], out)
+	case "tui":
+		return runTUI(args[1:], out)
+	case "audit":
+		return runAudit(args[1:], out)
 	case "doctor":
 		return runDoctor(args[1:], out)
 	case "build":
@@ -188,6 +193,22 @@ func run(args []string, out, errOut io.Writer) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+// runAudit exposes focused reports while reusing doctor as the single audit
+// engine. Each audit still builds into a temporary production destination.
+func runAudit(args []string, out io.Writer) error {
+	if len(args) == 0 || isHelp(args[0]) {
+		fmt.Fprintln(out, "Usage: hs audit <seo|links> [project-directory] [--strict] [--format text|json|sarif] [--build-drafts] [--build-future]")
+		return nil
+	}
+	check := args[0]
+	if check != "seo" && check != "links" {
+		return &exitError{code: 2, message: fmt.Sprintf("unknown audit %q; expected seo or links", check)}
+	}
+	doctorArgs := append([]string{}, args[1:]...)
+	doctorArgs = append(doctorArgs, "--only", check)
+	return runDoctor(doctorArgs, out)
 }
 
 // runBuild runs Hugo with production settings in a temporary destination and
@@ -569,21 +590,23 @@ type postSummary struct {
 }
 
 type contentItem struct {
-	Title     string    `json:"title"`
-	Date      time.Time `json:"date,omitempty"`
-	Section   string    `json:"section"`
-	Tags      []string  `json:"tags,omitempty"`
-	Draft     bool      `json:"draft"`
-	Words     int       `json:"word_count"`
-	URL       string    `json:"url"`
-	Source    string    `json:"source"`
-	Body      string    `json:"-"`
-	StatsPage bool      `json:"-"`
+	Title        string    `json:"title"`
+	Date         time.Time `json:"date,omitempty"`
+	Section      string    `json:"section"`
+	Categories   []string  `json:"categories,omitempty"`
+	Tags         []string  `json:"tags,omitempty"`
+	Draft        bool      `json:"draft"`
+	Words        int       `json:"word_count"`
+	URL          string    `json:"url"`
+	GeneratedURL string    `json:"-"`
+	Source       string    `json:"source"`
+	Body         string    `json:"-"`
+	StatsPage    bool      `json:"-"`
 }
 
 func runContent(args []string, out io.Writer) error {
 	if len(args) == 0 || isHelp(args[0]) {
-		fmt.Fprintln(out, "Usage: hs content list [site-directory] [--format text|json]\n       hs content search <terms> [site-directory] [--section NAME] [--tag TAG] [--draft true|false] [--from DATE] [--to DATE]\n       hs content new <title> [site-directory] [--section NAME] [--tag TAG] [--draft] [--date DATE]\n       hs content stats [site-directory] [--write] [--draft] [--output PATH]")
+		fmt.Fprintln(out, "Usage: hs content list [site-directory] [--draft true|false] [--format text|json]\n       hs content search <terms> [site-directory] [--section NAME] [--tag TAG] [--draft true|false] [--from DATE] [--to DATE]\n       hs content new <title> [site-directory] [--section NAME] [--tag TAG] [--draft] [--date DATE]\n       hs content stats [site-directory] [--write] [--draft] [--output PATH]")
 		return nil
 	}
 	switch args[0] {
@@ -626,15 +649,26 @@ func resolveContentProject(args []string) (string, []string, error) {
 
 func runContentList(args []string, out io.Writer) error {
 	format := "text"
+	draft := ""
 	var positional []string
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--format" {
+		switch args[i] {
+		case "--format":
 			if i+1 == len(args) {
 				return errors.New("--format requires text or json")
 			}
 			i++
 			format = args[i]
-		} else {
+		case "--draft":
+			if i+1 == len(args) {
+				return errors.New("--draft requires true or false")
+			}
+			i++
+			draft = args[i]
+			if draft != "true" && draft != "false" {
+				return errors.New("--draft requires true or false")
+			}
+		default:
 			positional = append(positional, args[i])
 		}
 	}
@@ -646,11 +680,20 @@ func runContentList(args []string, out io.Writer) error {
 		return err
 	}
 	if len(extra) != 0 {
-		return errors.New("usage: hs content list [site-directory] [--format text|json]")
+		return errors.New("usage: hs content list [site-directory] [--draft true|false] [--format text|json]")
 	}
 	items, err := collectContent(project)
 	if err != nil {
 		return err
+	}
+	if draft != "" {
+		filtered := items[:0]
+		for _, item := range items {
+			if strconv.FormatBool(item.Draft) == draft {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
 	}
 	if format == "json" {
 		return json.NewEncoder(out).Encode(items)
@@ -874,7 +917,7 @@ func collectContent(siteDir string) ([]contentItem, error) {
 			}
 			meta, body := parseFrontMatter(string(data))
 			relative, _ := filepath.Rel(siteDir, file)
-			items = append(items, contentItem{Title: meta.string("title"), Date: parseDate(meta.string("date", "publishdate", "publishDate")), Section: contentSection(virtual), Tags: meta.strings("tags", "tag"), Draft: strings.EqualFold(meta.string("draft"), "true"), Words: wordCount(body), URL: contentURL(virtual, meta), Source: filepath.ToSlash(relative), Body: body, StatsPage: strings.EqualFold(meta.string("hs_stats"), "true")})
+			items = append(items, contentItem{Title: meta.string("title"), Date: parseDate(meta.string("date", "publishdate", "publishDate")), Section: contentSection(virtual), Categories: meta.strings("categories", "category"), Tags: meta.strings("tags", "tag"), Draft: strings.EqualFold(meta.string("draft"), "true"), Words: wordCount(body), URL: contentURL(virtual, meta), GeneratedURL: generatedContentURL(virtual), Source: filepath.ToSlash(relative), Body: body, StatsPage: strings.EqualFold(meta.string("hs_stats"), "true")})
 			return nil
 		})
 		if err != nil {
@@ -901,6 +944,10 @@ func contentURL(virtual string, meta frontMatter) string {
 	if configured := meta.string("url"); configured != "" {
 		return configured
 	}
+	return generatedContentURL(virtual)
+}
+
+func generatedContentURL(virtual string) string {
 	virtual = strings.TrimSuffix(virtual, filepath.Ext(virtual))
 	parts := strings.Split(virtual, "/")
 	if len(parts) > 0 && parts[len(parts)-1] == "_index" {
@@ -1166,7 +1213,7 @@ func parseDoctorOptions(args []string) (DoctorOptions, error) {
 			opts.BuildFuture = true
 		case "--remote":
 			opts.Remote = true
-		case "--only", "--format":
+		case "--only", "--format", "--source":
 			if i+1 == len(args) {
 				return opts, fmt.Errorf("%s requires a value", arg)
 			}
@@ -1178,15 +1225,17 @@ func parseDoctorOptions(args []string) (DoctorOptions, error) {
 						return opts, fmt.Errorf("unknown doctor check %q", check)
 					}
 				}
-			} else {
+			} else if arg == "--format" {
 				opts.Format = args[i]
+			} else {
+				opts.Source = filepath.ToSlash(args[i])
 			}
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return opts, fmt.Errorf("unknown doctor option %q", arg)
 			}
 			if opts.ProjectDir != "" {
-				return opts, errors.New("usage: hs doctor [project-dir] [--only checks] [--strict] [--format text|json|sarif]")
+				return opts, errors.New("usage: hs doctor [project-dir] [--only checks] [--source content-file] [--strict] [--format text|json|sarif]")
 			}
 			opts.ProjectDir = arg
 		}
@@ -1204,6 +1253,9 @@ func parseDoctorOptions(args []string) (DoctorOptions, error) {
 	if len(opts.Only) == 0 {
 		opts.Only = []string{"build", "content", "urls", "links", "assets", "seo", "outputs"}
 	}
+	if opts.Source != "" && (len(opts.Only) != 1 || opts.Only[0] != "content") {
+		return opts, errors.New("--source requires --only content")
+	}
 	return opts, nil
 }
 
@@ -1218,7 +1270,7 @@ func doctor(opts DoctorOptions) ([]Finding, error) {
 	}
 	var findings []Finding
 	if selected["content"] {
-		findings = append(findings, doctorContent(project)...)
+		findings = append(findings, doctorContent(project, opts.Source)...)
 	}
 	if !selected["build"] && !selected["urls"] && !selected["links"] && !selected["assets"] && !selected["seo"] && !selected["outputs"] {
 		return sortFindings(findings), nil
@@ -1251,11 +1303,16 @@ func doctor(opts DoctorOptions) ([]Finding, error) {
 	return sortFindings(findings), nil
 }
 
-func doctorContent(project string) []Finding {
+func doctorContent(project string, selectedSource ...string) []Finding {
 	sources, err := contentSources(project)
 	if err != nil {
 		return []Finding{{Code: "HS-CONTENT-001", Severity: SeverityError, Check: "content", Message: err.Error()}}
 	}
+	sourceFilter := ""
+	if len(selectedSource) > 0 {
+		sourceFilter = filepath.ToSlash(selectedSource[0])
+	}
+	found := sourceFilter == ""
 	var findings []Finding
 	for _, source := range sources {
 		_ = filepath.WalkDir(source.path, func(file string, entry os.DirEntry, walkErr error) error {
@@ -1272,15 +1329,23 @@ func doctorContent(project string) []Finding {
 			}
 			meta, _ := parseFrontMatter(string(data))
 			relative, _ := filepath.Rel(project, file)
+			relative = filepath.ToSlash(relative)
+			if sourceFilter != "" && relative != sourceFilter {
+				return nil
+			}
+			found = true
 			if meta.string("title") == "" {
-				findings = append(findings, Finding{Code: "HS-CONTENT-002", Severity: SeverityWarning, Check: "content", Message: "Content file has no title.", Source: filepath.ToSlash(relative), Line: frontMatterLine(string(data), "title"), Help: "Add a title to the front matter."})
+				findings = append(findings, Finding{Code: "HS-CONTENT-002", Severity: SeverityWarning, Check: "content", Message: "Content file has no title.", Source: relative, Line: frontMatterLine(string(data), "title"), Help: "Add a title to the front matter."})
 			}
 			date := meta.string("date", "publishdate", "publishDate")
 			if entry.Name() != "_index.md" && entry.Name() != "_index.markdown" && (date == "" || parseDate(date).IsZero()) {
-				findings = append(findings, Finding{Code: "HS-CONTENT-003", Severity: SeverityWarning, Check: "content", Message: "Content file has a missing or invalid date.", Source: filepath.ToSlash(relative), Line: frontMatterLine(string(data), "date"), Help: "Add a valid date to the front matter."})
+				findings = append(findings, Finding{Code: "HS-CONTENT-003", Severity: SeverityWarning, Check: "content", Message: "Content file has a missing or invalid date.", Source: relative, Line: frontMatterLine(string(data), "date"), Help: "Add a valid date to the front matter."})
 			}
 			return nil
 		})
+	}
+	if !found {
+		return []Finding{{Code: "HS-CONTENT-004", Severity: SeverityError, Check: "content", Message: fmt.Sprintf("Content source was not found: %s", sourceFilter)}}
 	}
 	return findings
 }
@@ -2469,5 +2534,5 @@ func oneLine(s string, max int) string {
 	return s
 }
 func printUsage(out io.Writer) {
-	fmt.Fprintln(out, "hs searches and audits Hugo sites.\n\nUsage:\n  hs site set <base-url>\n  hs site show\n  hs search <terms...> [--limit N] [--json]\n  hs posts [site-directory] [--verbose]\n  hs content <list|search|new|stats> ...\n  hs build [project-directory] [--build-drafts] [--build-future] [--format text|json]\n  hs urls [project-directory] [--format text|json] [--compare snapshot.json]\n  hs doctor [project-directory] [--only checks] [--strict] [--format text|json|sarif]")
+	fmt.Fprintln(out, "hs searches and audits Hugo sites.\n\nUsage:\n  hs site set <base-url>\n  hs site show\n  hs search <terms...> [--limit N] [--json]\n  hs posts [site-directory] [--verbose]\n  hs content <list|search|new|stats> ...\n  hs tui [project-directory]\n  hs build [project-directory] [--build-drafts] [--build-future] [--format text|json]\n  hs urls [project-directory] [--format text|json] [--compare snapshot.json]\n  hs audit <seo|links> [project-directory] [--strict] [--format text|json|sarif]\n  hs doctor [project-directory] [--only checks] [--source content-file] [--strict] [--format text|json|sarif]")
 }

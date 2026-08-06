@@ -21,7 +21,7 @@ Build these before adding deployment integrations. They solve day-to-day Hugo pr
 
 | Command | Purpose | Priority |
 | --- | --- | --- |
-| `hs content list [dir]` | List content with title, date, section, tags, draft state, word count, and generated URL. | High |
+| `hs content list [dir]` | List content with title, date, section, tags, draft state, word count, and generated URL. Filter draft state with `--draft true|false`. | High |
 | `hs content search <terms> [dir]` | Search local front matter and Markdown, with section, tag, draft, and date filters. | High |
 | `hs content new <title>` | Create content from the project archetype with date, section, tag, and draft options. | High |
 | `hs doctor [dir]` | Build and audit the project before release. | High |
@@ -32,8 +32,8 @@ Build these before adding deployment integrations. They solve day-to-day Hugo pr
 
 | Command | Purpose | Priority |
 | --- | --- | --- |
-| `hs audit seo [dir]` | Identify missing titles, descriptions, canonical URLs, Open Graph images, alt text, and duplicate metadata. | High |
-| `hs audit links [dir]` | Check local content links and generated internal links. External checks remain opt-in. | High |
+| `hs audit seo [dir]` | Identify missing titles, descriptions, canonical URLs, Open Graph images, alt text, and duplicate metadata. | Delivered |
+| `hs audit links [dir]` | Check local content links and generated internal links. External checks remain opt-in. | Delivered |
 | `hs search index [dir]` | Generate, validate, inspect, and query the local `index.json` search index. | Medium |
 | `hs related <content-file>` | Recommend related content from taxonomy and text similarity. | Medium |
 | `hs redirects [dir]` | Generate redirect rules for moved URLs in Netlify, Cloudflare, Nginx, and Apache formats. | Medium |

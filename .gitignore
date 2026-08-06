@@ -2,12 +2,20 @@
 /bin/
 /dist/
 /hs
-/hugo-site-cli
+/hugo-site-tools
 *.exe
 *.test
 *.out
+*.prof
+*.cover
 coverage.txt
 coverage.html
+
+# Local environment and logs
+.env
+.env.*
+!.env.example
+*.log
 
 # Local reports and Hugo output
 /data.csv
@@ -19,6 +27,7 @@ coverage.html
 .idea/
 .vscode/
 *.swp
+*~
 
 # Local hs policy may include site-specific paths or thresholds.
 .hs.toml
