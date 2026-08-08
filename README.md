@@ -11,7 +11,7 @@ go install github.com/johnjanuszczak/hugo-site-tools/cmd/hs@latest
 For local development:
 
 ```sh
-go build -o ./bin/hs ./cmd/hs
+./scripts/build.sh
 ```
 
 ## Quick start
@@ -28,6 +28,7 @@ hs content list . --draft true
 hs content search fintech . --section articles --tag "Open Finance"
 hs content stats .
 hs tui .
+hs tui --remote https://example.com
 hs build .
 hs urls .
 hs doctor .
@@ -91,6 +92,10 @@ In the filter screen, use left/right to choose known sections, categories, and t
 
 Use PgUp/PgDown to move by a page through lists and text, Home/End to jump to the first or last item, and Space as PgDown. While typing a search or filter value, Space enters a space character.
 
+For a published site, use `hs tui --remote https://example.com`. It reads the site's `index.json`, or falls back to `sitemap.xml` when no index is available. It provides a read-only browser with search, filters, post details, direct URLs, refresh, and a remote doctor action. It cannot show drafts or source files, build the site, or create content.
+
+Build and audit results preserve Hugo's complete warning, including any suppression setting. When Hugo identifies a content file, or when `hs` can match a shortcode warning to its content invocation, the result includes the post and line. In the result screen, use `a`, `w`, `e`, or `i` to view all findings, warnings, errors, or information. The `>` marker identifies the selected finding; arrows move it, and `v` previews the selected finding's source when available.
+
 ### Build for release
 
 `hs build` runs a production Hugo build in a temporary directory and reports duration, generated pages and files, output size, and Hugo warnings. It never writes to the project's `public/` directory.
@@ -127,11 +132,23 @@ hs doctor . --build-drafts --build-future
 hs doctor . --only content --source content/articles/example.md
 ```
 
-Warnings do not fail the command unless you pass `--strict`. `--source` requires `--only content`. Errors return exit code 1, invalid arguments return 2, and an unavailable Hugo executable or unreadable project returns 3. Remote auditing is planned but not yet implemented.
+Warnings do not fail the command unless you pass `--strict`. `--source` requires `--only content`. Errors return exit code 1, invalid arguments return 2, and an unavailable Hugo executable or unreadable project returns 3.
+
+Audit a published site with an explicit URL, or use the configured URL from `hs site set`:
+
+```sh
+hs doctor --remote https://example.com
+hs audit seo --remote https://example.com
+hs doctor --remote
+# Compare the production build with the deployed sitemap.
+hs doctor . --remote https://example.com
+```
+
+Remote mode makes anonymous requests only. It crawls same-origin sitemap pages, checks status, redirects, titles, descriptions, canonical URLs, and internal links, and validates `robots.txt`, `sitemap.xml`, and `index.json`. Use `--max-pages N` (default 100) and `--timeout SECONDS` (default 20) to bound the crawl. With a local project directory, it also compares the production build's generated URLs with the deployed sitemap. It does not inspect drafts, forms, cookies, or credentials.
 
 ### Run focused audits
 
-Use focused reports when you need one category of release feedback. Both commands build into a temporary production directory and support text, JSON, and SARIF output.
+Use focused reports when you need one category of release feedback. Local commands build into a temporary production directory; remote commands inspect the published URL. Both support text, JSON, and SARIF output.
 
 ```sh
 hs audit seo .
@@ -147,6 +164,25 @@ The command entrypoint lives in `cmd/hs`; implementation and tests are kept in `
 go test ./...
 go vet ./...
 ```
+
+`./scripts/build.sh` writes the native executable to `bin/hs`. Set `OUTPUT` to choose another path, including a cross-compiled target:
+
+```sh
+GOOS=linux GOARCH=arm64 OUTPUT=./dist/hs ./scripts/build.sh
+```
+
+## Releases
+
+Push an annotated semantic-version tag to create a GitHub release with Linux and macOS archives for AMD64 and ARM64:
+
+```sh
+git switch main
+git pull --ff-only
+git tag -a v1.2.3 -m "v1.2.3"
+git push origin v1.2.3
+```
+
+The release workflow runs tests and `go vet`, builds the archives with `scripts/build.sh`, publishes SHA-256 checksums, and generates the GitHub release notes. See [the release runbook](docs/releasing.md) for the complete terminal checklist and recovery procedure.
 
 See [the product roadmap and doctor specification](docs/roadmap.md) for planned work and the intended package structure.
 

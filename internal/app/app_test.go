@@ -44,6 +44,93 @@ func TestFetchIndexMakesURLsAbsolute(t *testing.T) {
 	}
 }
 
+func TestDoctorRemoteAuditsExplicitURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<!doctype html><title>Home</title><meta name="description" content="A site"><link rel="canonical" href="/">`))
+		case "/robots.txt":
+			_, _ = w.Write([]byte("User-agent: *\n"))
+		case "/sitemap.xml":
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><urlset></urlset>`))
+		case "/index.json":
+			_, _ = w.Write([]byte(`[{"title":"Post","url":"/post/"}]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	var out bytes.Buffer
+	if err := run([]string{"doctor", "--remote", srv.URL, "--only", "seo"}, &out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Home page responded successfully") || strings.Contains(out.String(), "HS-SEO-00") {
+		t.Fatalf("remote doctor output = %s", out.String())
+	}
+}
+
+func TestRemoteTUITargetAndIndexLoading(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/index.json" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`[{"title":"Published post","url":"/post/","content":"Visible body"}]`))
+	}))
+	defer srv.Close()
+	project, remote, err := tuiTarget([]string{"--remote", srv.URL})
+	if err != nil || project != "" || remote != srv.URL {
+		t.Fatalf("tuiTarget = %q, %q, %v", project, remote, err)
+	}
+	m := newRemoteTUIModel(remote)
+	msg := m.loadRemoteContentCmd()()
+	result, ok := msg.(tuiRemoteContentResult)
+	if !ok || result.err != nil || len(result.items) != 1 || result.items[0].URL != srv.URL+"/post/" {
+		t.Fatalf("remote TUI result = %#v", msg)
+	}
+}
+
+func TestRemoteDoctorCrawlsSitemapAndFlagsBrokenInternalLink(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/", "/one/":
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`<title>Page</title><meta name="description" content="Description"><link rel="canonical" href="https://example.test/"><a href="/missing/">Missing</a>`))
+		case "/sitemap.xml":
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><urlset><url><loc>` + srv.URL + `/one/</loc></url></urlset>`))
+		case "/robots.txt", "/index.json":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	var out bytes.Buffer
+	err := run([]string{"doctor", "--remote", srv.URL, "--max-pages", "5"}, &out, &bytes.Buffer{})
+	if err == nil || !strings.Contains(out.String(), "Internal link is unavailable") {
+		t.Fatalf("remote crawl err=%v output=%s", err, out.String())
+	}
+}
+
+func TestRemoteTUIFallsBackToSitemap(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sitemap.xml" {
+			_, _ = w.Write([]byte(`<?xml version="1.0"?><urlset><url><loc>` + srv.URL + `/guides/</loc></url></urlset>`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	msg := newRemoteTUIModel(srv.URL).loadRemoteContentCmd()()
+	result := msg.(tuiRemoteContentResult)
+	if result.err != nil || len(result.items) != 1 || result.items[0].Title != "/guides/" {
+		t.Fatalf("sitemap fallback = %#v", result)
+	}
+}
+
 func TestPostsWritesContentReportAsCSV(t *testing.T) {
 	site := t.TempDir()
 	writePost(t, filepath.Join(site, "content", "articles", "first.md"), `---
@@ -207,6 +294,77 @@ func TestTUIShowsCommandResultAfterRunning(t *testing.T) {
 	result := updated.(tuiModel)
 	if result.running || result.result != "Build: success" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestTUIViewsDiagnosticSourceFromResult(t *testing.T) {
+	site := t.TempDir()
+	writePost(t, filepath.Join(site, "content", "entry.md"), "one\ntwo\n{{< x >}}\nfour")
+	m := newTUIModel(site)
+	m.screen = tuiResult
+	updated, _ := m.Update(tuiCommandResult{output: "WARNING HS-BUILD-002 content/entry.md:3: shortcode warning"})
+	result := updated.(tuiModel)
+	if len(result.resultSources) != 1 || result.resultSources[0].path != "content/entry.md" || result.resultSources[0].line != 3 {
+		t.Fatalf("result sources = %#v", result.resultSources)
+	}
+	updated, _ = result.updateResult("v")
+	preview := updated.(tuiModel)
+	if preview.screen != tuiPreview || preview.previewReturn != tuiResult || !strings.Contains(preview.previewText, ">    3 | {{< x >}}") {
+		t.Fatalf("diagnostic preview = %#v", preview)
+	}
+	updated, _ = preview.updatePreview("esc")
+	if updated.(tuiModel).screen != tuiResult {
+		t.Fatalf("Esc did not return to result screen")
+	}
+}
+
+func TestTUIFiltersResultDiagnosticsBySeverity(t *testing.T) {
+	m := newTUIModel(t.TempDir())
+	m.screen = tuiResult
+	updated, _ := m.Update(tuiCommandResult{output: "WARNING HS-BUILD-002 content/entry.md:3: warning\n  Help: detail\nERROR HS-LINK-001: broken link\nINFO HS-BUILD-003: complete"})
+	result := updated.(tuiModel)
+	updated, _ = result.updateResult("e")
+	result = updated.(tuiModel)
+	if result.resultFilter != "error" || strings.Contains(result.filteredResult(), "warning") || !strings.Contains(result.filteredResult(), "broken link") {
+		t.Fatalf("error filter = %q", result.filteredResult())
+	}
+	updated, _ = result.updateResult("w")
+	result = updated.(tuiModel)
+	if result.resultFilter != "warning" || !strings.Contains(result.filteredResult(), "Help: detail") || len(result.resultSources) != 1 {
+		t.Fatalf("warning filter = %q, sources=%#v", result.filteredResult(), result.resultSources)
+	}
+}
+
+func TestTUIResultBrowserMarksAndMovesSelectedFinding(t *testing.T) {
+	m := newTUIModel(t.TempDir())
+	m.screen = tuiResult
+	updated, _ := m.Update(tuiCommandResult{output: "WARNING HS-BUILD-002: warning\nERROR HS-LINK-001: broken link\nINFO HS-BUILD-003: complete"})
+	result := updated.(tuiModel)
+	if !strings.Contains(result.resultView(), "> WARNING HS-BUILD-002") {
+		t.Fatalf("initial result view lacks cursor:\n%s", result.resultView())
+	}
+	updated, _ = result.updateResult("down")
+	result = updated.(tuiModel)
+	if !strings.Contains(result.resultView(), "> ERROR HS-LINK-001") {
+		t.Fatalf("result view did not move cursor:\n%s", result.resultView())
+	}
+}
+
+func TestTUIWrapsLongDiagnosticLinesWithoutLosingText(t *testing.T) {
+	m := newTUIModel(t.TempDir())
+	m.screen = tuiResult
+	m.width = 42
+	message := "WARNING HS-BUILD-002 content/entry.md:3: WARN The x shortcode could not retrieve remote data from https://example.test/very/long/path"
+	updated, _ := m.Update(tuiCommandResult{output: message})
+	view := updated.(tuiModel).resultView()
+	compact := strings.ReplaceAll(view, "\n", "")
+	for _, want := range []string{"WARN The x shortcode", "https://example.test/very/long/path"} {
+		if !strings.Contains(compact, want) {
+			t.Fatalf("wrapped result lost %q:\n%s", want, view)
+		}
+	}
+	if !strings.Contains(view, "> WARNING HS-BUILD-002") {
+		t.Fatalf("wrapped result lost cursor:\n%s", view)
 	}
 }
 
@@ -441,6 +599,53 @@ printf '%s' 'body{}' > "$dest/site.css"
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("JSON build report missing %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestBuildWarningsKeepSuppressionsAndLocateShortcodeContent(t *testing.T) {
+	site := t.TempDir()
+	if err := os.WriteFile(filepath.Join(site, "hugo.toml"), []byte("baseURL = 'https://example.test/'"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	writePost(t, filepath.Join(site, "content", "articles", "affected.md"), "---\ntitle: Affected\n---\nBefore\n{{< x id=\"123\" >}}\nAfter")
+	installFakeHugo(t, `
+printf '%s\n' 'WARN The "x" shortcode was unable to retrieve the remote data: template: layouts/_shortcodes/x.html:20:25: executing "render"'
+printf '%s\n' 'WARN You can suppress this warning by adding ignoreErrors = ["error-remote-getjson"] to your site configuration.'
+mkdir -p "$dest"
+printf '%s' '<html></html>' > "$dest/index.html"
+`)
+	var out bytes.Buffer
+	if err := run([]string{"audit", "links", site}, &out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	report := out.String()
+	for _, want := range []string{
+		"WARNING HS-BUILD-002 content/articles/affected.md:5: WARN The \"x\" shortcode was unable to retrieve the remote data",
+		"You can suppress this warning by adding ignoreErrors",
+		"Hugo reported this shortcode warning from its template",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+	if strings.Count(report, "HS-BUILD-002") != 1 {
+		t.Fatalf("suppression must remain part of one warning:\n%s", report)
+	}
+}
+
+func TestBuildWarningsKeepFollowingSuppressionConfigurationAndDeduplicate(t *testing.T) {
+	warnings := parseHugoWarnings("WARN The \"x\" shortcode was unable to retrieve remote data\nWARN You can suppress this warning by adding the following to your site configuration:\nignoreErrors = ['error-remote-getjson']\n")
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Message, "ignoreErrors = ['error-remote-getjson']") {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+	site := t.TempDir()
+	if err := os.WriteFile(filepath.Join(site, "hugo.toml"), []byte("baseURL = 'https://example.test/'"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	writePost(t, filepath.Join(site, "content", "entry.md"), "{{< x >}}")
+	findings := buildWarningFindings(site, []buildWarning{warnings[0], warnings[0], warnings[0]})
+	if len(findings) != 1 || findings[0].Source != "content/entry.md" || findings[0].Line != 1 {
+		t.Fatalf("findings = %#v", findings)
 	}
 }
 

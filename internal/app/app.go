@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -74,14 +75,18 @@ type exitError struct {
 func (e *exitError) Error() string { return e.message }
 
 type DoctorOptions struct {
-	ProjectDir  string
-	Only        []string
-	Source      string
-	Strict      bool
-	Format      string
-	BuildDrafts bool
-	BuildFuture bool
-	Remote      bool
+	ProjectDir     string
+	RemoteURL      string
+	Only           []string
+	OnlySet        bool
+	Source         string
+	Strict         bool
+	Format         string
+	BuildDrafts    bool
+	BuildFuture    bool
+	Remote         bool
+	RemoteMaxPages int
+	RemoteTimeout  time.Duration
 }
 
 type Severity string
@@ -136,17 +141,32 @@ type buildReport struct {
 }
 
 type hugoBuild struct {
-	Project     string
-	OutputDir   string
-	HugoVersion string
-	Duration    time.Duration
-	Pages       map[string]generatedPage
-	Files       map[string]bool
-	OutputBytes int64
-	Warnings    []string
-	BuildErr    error
-	Output      string
+	Project        string
+	OutputDir      string
+	HugoVersion    string
+	Duration       time.Duration
+	Pages          map[string]generatedPage
+	Files          map[string]bool
+	OutputBytes    int64
+	Warnings       []string
+	WarningDetails []buildWarning
+	BuildErr       error
+	Output         string
 }
+
+// buildWarning keeps the full diagnostic Hugo emitted. Source and Line are
+// populated when the diagnostic names a file position in the project.
+type buildWarning struct {
+	Message string
+	Source  string
+	Line    int
+}
+
+var (
+	hugoWarningPrefix = regexp.MustCompile(`(?i)^\s*(?:\d{4}-\d{2}-\d{2}[^\s]*\s+)?WARN(?:ING)?\s*[: ]\s*`)
+	hugoLocation      = regexp.MustCompile(`(?m)(?:^|\s)([^\s:]+\.(?:md|markdown|html|gohtml)):(\d+)(?::\d+)?`)
+	shortcodeWarning  = regexp.MustCompile(`(?i)["']([^"']+)["']\s+shortcode`)
+)
 
 // Run executes hs and returns the process exit code. It keeps command behavior
 // testable while allowing cmd/hs to remain a minimal process entrypoint.
@@ -196,10 +216,10 @@ func run(args []string, out, errOut io.Writer) error {
 }
 
 // runAudit exposes focused reports while reusing doctor as the single audit
-// engine. Each audit still builds into a temporary production destination.
+// engine. Local audits build into a temporary production destination.
 func runAudit(args []string, out io.Writer) error {
 	if len(args) == 0 || isHelp(args[0]) {
-		fmt.Fprintln(out, "Usage: hs audit <seo|links> [project-directory] [--strict] [--format text|json|sarif] [--build-drafts] [--build-future]")
+		fmt.Fprintln(out, "Usage: hs audit <seo|links> [project-directory] [--remote URL] [--strict] [--format text|json|sarif] [--build-drafts] [--build-future]")
 		return nil
 	}
 	check := args[0]
@@ -318,10 +338,9 @@ func runHugoBuild(project string, buildDrafts, buildFuture bool) (hugoBuild, err
 	built.Duration = time.Since(started)
 	built.Output = string(output)
 	built.BuildErr = buildErr
-	for _, line := range strings.Split(built.Output, "\n") {
-		if strings.Contains(strings.ToUpper(line), "WARN") {
-			built.Warnings = append(built.Warnings, strings.TrimSpace(line))
-		}
+	built.WarningDetails = parseHugoWarnings(built.Output)
+	for _, warning := range built.WarningDetails {
+		built.Warnings = append(built.Warnings, warning.Message)
 	}
 	built.OutputBytes, _ = directorySize(temporary)
 	if buildErr != nil {
@@ -333,6 +352,55 @@ func runHugoBuild(project string, buildDrafts, buildFuture bool) (hugoBuild, err
 		return hugoBuild{}, &exitError{code: 3, message: err.Error()}
 	}
 	return built, nil
+}
+
+// parseHugoWarnings retains warning continuations. Hugo emits its suggested
+// suppression setting as a separate WARN line, which used to become a second,
+// contextless finding in hs.
+func parseHugoWarnings(output string) []buildWarning {
+	var warnings []buildWarning
+	var current *buildWarning
+	finish := func() {
+		if current == nil {
+			return
+		}
+		current.Message = strings.TrimSpace(current.Message)
+		if current.Message != "" {
+			if match := hugoLocation.FindStringSubmatch(current.Message); len(match) == 3 {
+				current.Source = filepath.ToSlash(match[1])
+				current.Line, _ = strconv.Atoi(match[2])
+			}
+			warnings = append(warnings, *current)
+		}
+		current = nil
+	}
+	for _, line := range strings.Split(output, "\n") {
+		message := hugoWarningPrefix.ReplaceAllString(line, "")
+		isWarning := message != line
+		isSuppression := strings.Contains(strings.ToLower(message), "you can suppress this warning")
+		if isWarning {
+			if current != nil && isSuppression {
+				current.Message += "\n" + strings.TrimSpace(message)
+				continue
+			}
+			finish()
+			current = &buildWarning{Message: strings.TrimSpace(line)}
+			continue
+		}
+		if current != nil && isSuppression {
+			current.Message += "\n" + strings.TrimSpace(message)
+			continue
+		}
+		if current != nil && strings.Contains(strings.ToLower(current.Message), "you can suppress this warning") {
+			if strings.TrimSpace(line) != "" {
+				current.Message += "\n" + strings.TrimSpace(line)
+				continue
+			}
+		}
+		finish()
+	}
+	finish()
+	return warnings
 }
 
 func directorySize(root string) (int64, error) {
@@ -1183,7 +1251,39 @@ func runDoctor(args []string, out io.Writer) error {
 		return &exitError{code: 2, message: err.Error()}
 	}
 	if opts.Remote {
-		return &exitError{code: 4, message: "remote doctor checks are not available in this release"}
+		var findings []Finding
+		var localURLs []string
+		if opts.ProjectDir != "" {
+			var localFindings []Finding
+			localFindings, localURLs, err = doctorWithURLs(opts)
+			if err != nil {
+				return err
+			}
+			findings = append(findings, localFindings...)
+		}
+		remoteFindings, err := doctorRemote(opts)
+		if err != nil {
+			return &exitError{code: 4, message: err.Error()}
+		}
+		findings = append(findings, remoteFindings...)
+		if len(localURLs) > 0 {
+			remoteURLs, remoteErr := publishedSitemapURLs(opts.RemoteURL, opts.RemoteMaxPages, opts.RemoteTimeout)
+			if remoteErr != nil {
+				findings = append(findings, Finding{Code: "HS-REMOTE-020", Severity: SeverityWarning, Check: "remote", Message: "Could not compare the local build with the published sitemap: " + remoteErr.Error(), Target: opts.RemoteURL + "/sitemap.xml"})
+			} else {
+				findings = append(findings, comparePublishedURLs(localURLs, remoteURLs)...)
+			}
+		}
+		findings = sortFindings(findings)
+		if err := writeDoctorReport(out, opts.Format, findings); err != nil {
+			return err
+		}
+		for _, f := range findings {
+			if f.Severity == SeverityError || (opts.Strict && f.Severity == SeverityWarning) {
+				return &exitError{code: 1}
+			}
+		}
+		return nil
 	}
 	findings, err := doctor(opts)
 	if err != nil {
@@ -1201,7 +1301,7 @@ func runDoctor(args []string, out io.Writer) error {
 }
 
 func parseDoctorOptions(args []string) (DoctorOptions, error) {
-	opts := DoctorOptions{Format: "text"}
+	opts := DoctorOptions{Format: "text", RemoteMaxPages: 100, RemoteTimeout: 20 * time.Second}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch arg {
@@ -1211,14 +1311,37 @@ func parseDoctorOptions(args []string) (DoctorOptions, error) {
 			opts.BuildDrafts = true
 		case "--build-future":
 			opts.BuildFuture = true
+		case "--max-pages", "--timeout":
+			if i+1 == len(args) {
+				return opts, fmt.Errorf("%s requires a value", arg)
+			}
+			i++
+			value, err := strconv.Atoi(args[i])
+			if err != nil || value < 1 {
+				return opts, fmt.Errorf("%s requires a positive number", arg)
+			}
+			if arg == "--max-pages" {
+				opts.RemoteMaxPages = value
+			} else {
+				opts.RemoteTimeout = time.Duration(value) * time.Second
+			}
 		case "--remote":
 			opts.Remote = true
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				base, err := normalizeBaseURL(args[i])
+				if err != nil {
+					return opts, err
+				}
+				opts.RemoteURL = base
+			}
 		case "--only", "--format", "--source":
 			if i+1 == len(args) {
 				return opts, fmt.Errorf("%s requires a value", arg)
 			}
 			i++
 			if arg == "--only" {
+				opts.OnlySet = true
 				opts.Only = strings.Split(args[i], ",")
 				for _, check := range opts.Only {
 					if !doctorChecks[check] {
@@ -1235,12 +1358,19 @@ func parseDoctorOptions(args []string) (DoctorOptions, error) {
 				return opts, fmt.Errorf("unknown doctor option %q", arg)
 			}
 			if opts.ProjectDir != "" {
-				return opts, errors.New("usage: hs doctor [project-dir] [--only checks] [--source content-file] [--strict] [--format text|json|sarif]")
+				return opts, errors.New("usage: hs doctor [project-dir] [--remote URL] [--only checks] [--source content-file] [--strict] [--format text|json|sarif]")
 			}
 			opts.ProjectDir = arg
 		}
 	}
-	if opts.ProjectDir == "" {
+	if opts.Remote && opts.RemoteURL == "" {
+		cfg, err := loadConfig()
+		if err != nil {
+			return opts, err
+		}
+		opts.RemoteURL = cfg.BaseURL
+	}
+	if opts.ProjectDir == "" && !opts.Remote {
 		var err error
 		opts.ProjectDir, err = os.Getwd()
 		if err != nil {
@@ -1253,16 +1383,343 @@ func parseDoctorOptions(args []string) (DoctorOptions, error) {
 	if len(opts.Only) == 0 {
 		opts.Only = []string{"build", "content", "urls", "links", "assets", "seo", "outputs"}
 	}
+	if opts.Remote && opts.Source != "" {
+		return opts, errors.New("--source is available only for local doctor checks")
+	}
 	if opts.Source != "" && (len(opts.Only) != 1 || opts.Only[0] != "content") {
 		return opts, errors.New("--source requires --only content")
 	}
 	return opts, nil
 }
 
+// doctorRemote checks the public HTTP surface without sending credentials,
+// cookies, or form data. It deliberately does not infer unpublished content.
+func doctorRemote(opts DoctorOptions) ([]Finding, error) {
+	base := opts.RemoteURL
+	if base == "" {
+		return nil, errors.New("remote site URL is required; pass --remote URL or configure one with hs site set")
+	}
+	client := &http.Client{Timeout: opts.RemoteTimeout}
+	page, err := fetchRemotePage(client, base+"/")
+	if err != nil {
+		return nil, fmt.Errorf("request %s: %w", base, err)
+	}
+	findings := []Finding{}
+	if page.status < 200 || page.status > 299 {
+		findings = append(findings, Finding{Code: "HS-REMOTE-001", Severity: SeverityError, Check: "remote", Message: fmt.Sprintf("Home page returned HTTP %d.", page.status), Target: base})
+		return findings, nil
+	}
+	findings = append(findings, Finding{Code: "HS-REMOTE-INFO", Severity: SeverityInfo, Check: "remote", Message: "Home page responded successfully.", Target: base})
+	findings = append(findings, remotePageFindings(base, page, true)...)
+	for _, assetSpec := range []struct{ path, name string }{{"/robots.txt", "robots.txt"}, {"/sitemap.xml", "sitemap.xml"}, {"/index.json", "index.json"}} {
+		asset, assetErr := fetchRemotePage(client, base+assetSpec.path)
+		if assetErr != nil || asset.status < 200 || asset.status > 299 {
+			findings = append(findings, Finding{Code: "HS-REMOTE-010", Severity: SeverityWarning, Check: "remote", Message: fmt.Sprintf("%s is not available.", assetSpec.name), Target: base + assetSpec.path})
+			continue
+		}
+		if assetSpec.name == "sitemap.xml" && !validXML(asset.body) {
+			findings = append(findings, Finding{Code: "HS-OUTPUT-001", Severity: SeverityError, Check: "outputs", Message: "Published sitemap.xml is malformed.", Target: base + assetSpec.path})
+		} else if assetSpec.name == "index.json" && !json.Valid(asset.body) {
+			findings = append(findings, Finding{Code: "HS-OUTPUT-002", Severity: SeverityError, Check: "outputs", Message: "Published index.json is malformed.", Target: base + assetSpec.path})
+		} else {
+			findings = append(findings, Finding{Code: "HS-REMOTE-011", Severity: SeverityInfo, Check: "remote", Message: assetSpec.name + " is available.", Target: base + assetSpec.path})
+		}
+	}
+	urls, err := publishedSitemapURLs(base, opts.RemoteMaxPages, opts.RemoteTimeout)
+	if err != nil {
+		findings = append(findings, Finding{Code: "HS-REMOTE-012", Severity: SeverityWarning, Check: "remote", Message: "Could not crawl the published sitemap: " + err.Error(), Target: base + "/sitemap.xml"})
+		return sortFindings(findings), nil
+	}
+	known := map[string]bool{}
+	for _, target := range urls {
+		known[target] = true
+	}
+	linkCache := map[string]bool{}
+	for _, target := range urls {
+		page, pageErr := fetchRemotePage(client, target)
+		if pageErr != nil || page.status < 200 || page.status > 299 {
+			findings = append(findings, Finding{Code: "HS-REMOTE-003", Severity: SeverityError, Check: "remote", Message: "Sitemap page is unavailable.", Target: target})
+			continue
+		}
+		findings = append(findings, remotePageFindings(base, page, false)...)
+		for _, link := range remoteInternalLinks(page) {
+			if !sameOrigin(base, link) {
+				continue
+			}
+			if linkCache[link] {
+				continue
+			}
+			linkCache[link] = true
+			if len(linkCache) > opts.RemoteMaxPages*5 {
+				break
+			}
+			if !known[link] {
+				linked, linkErr := fetchRemotePage(client, link)
+				if linkErr != nil || linked.status < 200 || linked.status > 299 {
+					findings = append(findings, Finding{Code: "HS-LINK-001", Severity: SeverityError, Check: "links", Message: "Internal link is unavailable.", Target: link})
+				}
+			}
+		}
+	}
+	return sortFindings(findings), nil
+}
+
+type remotePage struct {
+	status                              int
+	contentType, requestedURL, finalURL string
+	body                                []byte
+}
+
+func fetchRemotePage(client *http.Client, target string) (remotePage, error) {
+	resp, err := client.Get(target)
+	if err != nil {
+		return remotePage{}, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return remotePage{}, err
+	}
+	return remotePage{status: resp.StatusCode, contentType: resp.Header.Get("Content-Type"), requestedURL: target, finalURL: resp.Request.URL.String(), body: body}, nil
+}
+
+func remotePageFindings(base string, page remotePage, home bool) []Finding {
+	target := page.finalURL
+	if target == "" {
+		target = base
+	}
+	if !strings.Contains(strings.ToLower(page.contentType), "text/html") {
+		return []Finding{{Code: "HS-REMOTE-002", Severity: SeverityWarning, Check: "remote", Message: "Page did not return an HTML content type.", Target: target}}
+	}
+	root, err := html.Parse(strings.NewReader(string(page.body)))
+	if err != nil {
+		return nil
+	}
+	title, description, canonical := remoteHTMLMetadata(root)
+	var findings []Finding
+	if page.requestedURL != "" && page.finalURL != "" && page.requestedURL != page.finalURL {
+		findings = append(findings, Finding{Code: "HS-REMOTE-004", Severity: SeverityWarning, Check: "remote", Message: "Page redirected to a different URL.", Target: page.requestedURL})
+	}
+	if title == "" {
+		findings = append(findings, Finding{Code: "HS-SEO-001", Severity: SeverityWarning, Check: "seo", Message: "Page has no non-empty title.", Target: target})
+	}
+	if description == "" {
+		findings = append(findings, Finding{Code: "HS-SEO-002", Severity: SeverityWarning, Check: "seo", Message: "Page has no non-empty meta description.", Target: target})
+	}
+	if canonical == "" {
+		findings = append(findings, Finding{Code: "HS-SEO-003", Severity: SeverityWarning, Check: "seo", Message: "Page has no canonical link.", Target: target})
+	} else if !sameOrigin(base, absoluteURL(target, canonical)) {
+		findings = append(findings, Finding{Code: "HS-SEO-004", Severity: SeverityWarning, Check: "seo", Message: "Page canonical points to a different origin.", Target: target})
+	}
+	_ = home
+	return findings
+}
+
+func remoteInternalLinks(page remotePage) []string {
+	root, err := html.Parse(strings.NewReader(string(page.body)))
+	if err != nil {
+		return nil
+	}
+	var links []string
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "a" {
+			for _, attr := range n.Attr {
+				if strings.EqualFold(attr.Key, "href") {
+					ref := absoluteURL(page.finalURL, attr.Val)
+					parsed, err := url.Parse(ref)
+					if err == nil && parsed.Scheme != "" && parsed.Host != "" {
+						parsed.Fragment = ""
+						links = append(links, parsed.String())
+					}
+					break
+				}
+			}
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(root)
+	return links
+}
+
+func sameOrigin(base, target string) bool {
+	a, aErr := url.Parse(base)
+	b, bErr := url.Parse(target)
+	return aErr == nil && bErr == nil && a.Scheme == b.Scheme && a.Host == b.Host
+}
+
+func publishedSitemapURLs(base string, maxPages int, timeout time.Duration) ([]string, error) {
+	client := &http.Client{Timeout: timeout}
+	seenSitemaps, seenPages := map[string]bool{}, map[string]bool{}
+	var visit func(string) error
+	visit = func(sitemap string) error {
+		if seenSitemaps[sitemap] {
+			return nil
+		}
+		seenSitemaps[sitemap] = true
+		page, err := fetchRemotePage(client, sitemap)
+		if err != nil {
+			return err
+		}
+		if page.status < 200 || page.status > 299 {
+			return fmt.Errorf("%s returned HTTP %d", sitemap, page.status)
+		}
+		kind, locations := sitemapDocument(page.body)
+		if kind == "" {
+			return errors.New("sitemap.xml is malformed")
+		}
+		for _, location := range locations {
+			target := absoluteURL(sitemap, location)
+			if !sameOrigin(base, target) {
+				continue
+			}
+			if kind == "sitemapindex" {
+				if err := visit(target); err != nil {
+					return err
+				}
+				continue
+			}
+			if len(seenPages) >= maxPages {
+				return nil
+			}
+			seenPages[target] = true
+		}
+		return nil
+	}
+	if err := visit(strings.TrimRight(base, "/") + "/sitemap.xml"); err != nil {
+		return nil, err
+	}
+	urls := make([]string, 0, len(seenPages))
+	for target := range seenPages {
+		urls = append(urls, target)
+	}
+	sort.Strings(urls)
+	return urls, nil
+}
+
+func sitemapDocument(data []byte) (string, []string) {
+	decoder := xml.NewDecoder(strings.NewReader(string(data)))
+	kind, inLoc := "", false
+	var locations []string
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return kind, locations
+		}
+		if err != nil {
+			return "", nil
+		}
+		switch value := token.(type) {
+		case xml.StartElement:
+			if kind == "" {
+				kind = value.Name.Local
+			}
+			if value.Name.Local == "loc" {
+				inLoc = true
+			}
+		case xml.CharData:
+			if inLoc {
+				locations = append(locations, strings.TrimSpace(string(value)))
+			}
+		case xml.EndElement:
+			if value.Name.Local == "loc" {
+				inLoc = false
+			}
+		}
+	}
+}
+
+func comparePublishedURLs(localURLs, remoteURLs []string) []Finding {
+	local, remote := map[string]bool{}, map[string]bool{}
+	for _, target := range localURLs {
+		local[target] = true
+	}
+	for _, target := range remoteURLs {
+		parsed, err := url.Parse(target)
+		if err == nil {
+			remote[parsed.Path] = true
+		}
+	}
+	var findings []Finding
+	for target := range local {
+		if !remote[target] {
+			findings = append(findings, Finding{Code: "HS-REMOTE-021", Severity: SeverityWarning, Check: "remote", Message: "Local generated URL is absent from the published sitemap.", Target: target})
+		}
+	}
+	for target := range remote {
+		if !local[target] {
+			findings = append(findings, Finding{Code: "HS-REMOTE-022", Severity: SeverityWarning, Check: "remote", Message: "Published sitemap URL is absent from the local build.", Target: target})
+		}
+	}
+	return findings
+}
+
+func containsCheck(checks []string, wanted string) bool {
+	for _, check := range checks {
+		if check == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func remoteHTMLMetadata(root *html.Node) (title, description, canonical string) {
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			attrs := map[string]string{}
+			for _, attr := range n.Attr {
+				attrs[strings.ToLower(attr.Key)] = strings.TrimSpace(attr.Val)
+			}
+			switch strings.ToLower(n.Data) {
+			case "title":
+				if title == "" {
+					title = strings.TrimSpace(nodeText(n))
+				}
+			case "meta":
+				if strings.EqualFold(attrs["name"], "description") {
+					description = attrs["content"]
+				}
+			case "link":
+				if strings.EqualFold(attrs["rel"], "canonical") {
+					canonical = attrs["href"]
+				}
+			}
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(root)
+	return
+}
+
+func nodeText(n *html.Node) string {
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(current *html.Node) {
+		if current.Type == html.TextNode {
+			b.WriteString(current.Data)
+		}
+		for child := current.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(n)
+	return b.String()
+}
+
 func doctor(opts DoctorOptions) ([]Finding, error) {
+	findings, _, err := doctorWithURLs(opts)
+	return findings, err
+}
+
+func doctorWithURLs(opts DoctorOptions) ([]Finding, []string, error) {
 	project, configFiles, err := validateHugoProject(opts.ProjectDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	selected := make(map[string]bool)
 	for _, check := range opts.Only {
@@ -1273,20 +1730,18 @@ func doctor(opts DoctorOptions) ([]Finding, error) {
 		findings = append(findings, doctorContent(project, opts.Source)...)
 	}
 	if !selected["build"] && !selected["urls"] && !selected["links"] && !selected["assets"] && !selected["seo"] && !selected["outputs"] {
-		return sortFindings(findings), nil
+		return sortFindings(findings), nil, nil
 	}
 	built, err := runHugoBuild(project, opts.BuildDrafts, opts.BuildFuture)
 	if err != nil {
-		return sortFindings(findings), err
+		return sortFindings(findings), nil, err
 	}
 	defer os.RemoveAll(built.OutputDir)
 	findings = append(findings, Finding{Code: "HS-BUILD-INFO", Severity: SeverityInfo, Check: "build", Message: built.HugoVersion})
-	for _, warning := range built.Warnings {
-		findings = append(findings, Finding{Code: "HS-BUILD-002", Severity: SeverityWarning, Check: "build", Message: warning})
-	}
+	findings = append(findings, buildWarningFindings(project, built.WarningDetails)...)
 	if built.BuildErr != nil {
 		findings = append(findings, Finding{Code: "HS-BUILD-001", Severity: SeverityError, Check: "build", Message: fmt.Sprintf("Hugo build failed after %s: %s", built.Duration.Round(time.Millisecond), strings.TrimSpace(built.Output)), Help: "Fix the Hugo build error and run doctor again."})
-		return sortFindings(findings), nil
+		return sortFindings(findings), nil, nil
 	}
 	if selected["build"] {
 		findings = append(findings, Finding{Code: "HS-BUILD-003", Severity: SeverityInfo, Check: "build", Message: fmt.Sprintf("Hugo build completed in %s.", built.Duration.Round(time.Millisecond))})
@@ -1300,7 +1755,98 @@ func doctor(opts DoctorOptions) ([]Finding, error) {
 	if selected["outputs"] {
 		findings = append(findings, doctorOutputs(built.OutputDir, built.Pages)...)
 	}
-	return sortFindings(findings), nil
+	return sortFindings(findings), generatedURLs(built.Pages), nil
+}
+
+// buildWarningFindings maps Hugo diagnostics back to content where possible.
+// Hugo often reports a shortcode template rather than the Markdown page that
+// invoked it, so identify every local invocation instead of hiding the useful
+// post and line information behind the template warning.
+func buildWarningFindings(project string, warnings []buildWarning) []Finding {
+	var findings []Finding
+	seen := map[string]bool{}
+	appendFinding := func(finding Finding) {
+		key := finding.Source + ":" + strconv.Itoa(finding.Line) + "\n" + finding.Message
+		if !seen[key] {
+			seen[key] = true
+			findings = append(findings, finding)
+		}
+	}
+	for _, warning := range warnings {
+		base := Finding{Code: "HS-BUILD-002", Severity: SeverityWarning, Check: "build", Message: warning.Message}
+		if source, line, ok := projectDiagnosticLocation(project, warning); ok {
+			base.Source, base.Line = source, line
+			appendFinding(base)
+			continue
+		}
+		candidates := shortcodeSources(project, warning.Message)
+		if len(candidates) == 0 {
+			appendFinding(base)
+			continue
+		}
+		for _, candidate := range candidates {
+			finding := base
+			finding.Source, finding.Line = candidate.Source, candidate.Line
+			finding.Help = "Hugo reported this shortcode warning from its template; this is a content invocation that can trigger it."
+			appendFinding(finding)
+		}
+	}
+	return findings
+}
+
+func projectDiagnosticLocation(project string, warning buildWarning) (string, int, bool) {
+	if warning.Source == "" || filepath.IsAbs(warning.Source) {
+		return "", 0, false
+	}
+	source := filepath.ToSlash(warning.Source)
+	info, err := os.Stat(filepath.Join(project, filepath.FromSlash(source)))
+	if err != nil || info.IsDir() {
+		return "", 0, false
+	}
+	return source, warning.Line, true
+}
+
+func shortcodeSources(project, message string) []Finding {
+	match := shortcodeWarning.FindStringSubmatch(message)
+	if len(match) != 2 {
+		return nil
+	}
+	name := regexp.QuoteMeta(match[1])
+	shortcode := regexp.MustCompile(`(?m)\{\{[<%]\s*` + name + `(?:\s|[>%])`)
+	sources, err := contentSources(project)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var matches []Finding
+	for _, source := range sources {
+		_ = filepath.WalkDir(source.path, func(file string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil || entry.IsDir() {
+				return nil
+			}
+			ext := strings.ToLower(filepath.Ext(file))
+			if ext != ".md" && ext != ".markdown" && ext != ".html" {
+				return nil
+			}
+			data, err := os.ReadFile(file)
+			if err != nil {
+				return nil
+			}
+			relative, err := filepath.Rel(project, file)
+			if err != nil {
+				return nil
+			}
+			relative = filepath.ToSlash(relative)
+			for line, text := range strings.Split(string(data), "\n") {
+				if shortcode.MatchString(text) && !seen[relative+":"+strconv.Itoa(line+1)] {
+					seen[relative+":"+strconv.Itoa(line+1)] = true
+					matches = append(matches, Finding{Source: relative, Line: line + 1})
+				}
+			}
+			return nil
+		})
+	}
+	return matches
 }
 
 func doctorContent(project string, selectedSource ...string) []Finding {
@@ -1786,16 +2332,28 @@ func writeDoctorReport(out io.Writer, format string, findings []Finding) error {
 					location += fmt.Sprintf(":%d", finding.Line)
 				}
 			}
+			var err error
 			if location != "" {
-				if _, err := fmt.Fprintf(out, "%s %s %s: %s\n", strings.ToUpper(string(finding.Severity)), finding.Code, location, finding.Message); err != nil {
+				err = writeFinding(out, "%s %s %s: %s\n", strings.ToUpper(string(finding.Severity)), finding.Code, location, finding.Message)
+			} else {
+				err = writeFinding(out, "%s %s: %s\n", strings.ToUpper(string(finding.Severity)), finding.Code, finding.Message)
+			}
+			if err != nil {
+				return err
+			}
+			if finding.Help != "" {
+				if _, err := fmt.Fprintf(out, "  Help: %s\n", finding.Help); err != nil {
 					return err
 				}
-			} else if _, err := fmt.Fprintf(out, "%s %s: %s\n", strings.ToUpper(string(finding.Severity)), finding.Code, finding.Message); err != nil {
-				return err
 			}
 		}
 		return nil
 	}
+}
+
+func writeFinding(out io.Writer, format string, args ...interface{}) error {
+	_, err := fmt.Fprintf(out, format, args...)
+	return err
 }
 
 func collectPosts(siteDir string) ([]post, error) {
@@ -2534,5 +3092,5 @@ func oneLine(s string, max int) string {
 	return s
 }
 func printUsage(out io.Writer) {
-	fmt.Fprintln(out, "hs searches and audits Hugo sites.\n\nUsage:\n  hs site set <base-url>\n  hs site show\n  hs search <terms...> [--limit N] [--json]\n  hs posts [site-directory] [--verbose]\n  hs content <list|search|new|stats> ...\n  hs tui [project-directory]\n  hs build [project-directory] [--build-drafts] [--build-future] [--format text|json]\n  hs urls [project-directory] [--format text|json] [--compare snapshot.json]\n  hs audit <seo|links> [project-directory] [--strict] [--format text|json|sarif]\n  hs doctor [project-directory] [--only checks] [--source content-file] [--strict] [--format text|json|sarif]")
+	fmt.Fprintln(out, "hs searches and audits Hugo sites.\n\nUsage:\n  hs site set <base-url>\n  hs site show\n  hs search <terms...> [--limit N] [--json]\n  hs posts [site-directory] [--verbose]\n  hs content <list|search|new|stats> ...\n  hs tui [project-directory] | hs tui --remote <base-url>\n  hs build [project-directory] [--build-drafts] [--build-future] [--format text|json]\n  hs urls [project-directory] [--format text|json] [--compare snapshot.json]\n  hs audit <seo|links> [project-directory] [--remote URL] [--strict] [--format text|json|sarif]\n  hs doctor [project-directory] [--remote URL] [--max-pages N] [--timeout SECONDS] [--only checks] [--source content-file] [--strict] [--format text|json|sarif]")
 }

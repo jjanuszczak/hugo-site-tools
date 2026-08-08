@@ -42,8 +42,8 @@ Build these before adding deployment integrations. They solve day-to-day Hugo pr
 
 | Command | Purpose | Priority |
 | --- | --- | --- |
-| `hs doctor --remote` | Verify the public site's HTTP behaviour, sitemap, canonical URLs, and standard Hugo outputs. | High |
-| `hs doctor [dir] --remote` | Compare a local production build with the deployed site. | High |
+| `hs doctor --remote [URL]` | Crawl same-origin sitemap pages and verify public HTTP behaviour, links, canonical URLs, and standard Hugo outputs. | Delivered |
+| `hs doctor [dir] --remote [URL]` | Compare a local production build with the deployed sitemap. | Delivered |
 | `hs deploy check [dir]` | Check release readiness and detect stale or incomplete deployments. | Medium |
 | CI integration | Stable exit codes, JSON and SARIF output, and GitHub Actions examples. | Medium |
 

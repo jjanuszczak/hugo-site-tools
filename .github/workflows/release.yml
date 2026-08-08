@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release (for example, v1.2.3)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+          check-latest: true
+
+      - name: Test and vet
+        run: |
+          go test ./...
+          go vet ./...
+
+      - name: Build release archives
+        env:
+          VERSION: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -eu
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            archive="hs_${VERSION}_${os}_${arch}"
+            stage="dist/${archive}"
+            mkdir -p "$stage"
+            GOOS="$os" GOARCH="$arch" OUTPUT="$stage/hs" ./scripts/build.sh
+            tar -C dist -czf "dist/${archive}.tar.gz" "$archive"
+            rm -rf "$stage"
+          done
+          (cd dist && sha256sum hs_*.tar.gz > SHA256SUMS)
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.tag || github.ref_name }}
+        run: gh release create "$VERSION" dist/*.tar.gz dist/SHA256SUMS --verify-tag --generate-notes

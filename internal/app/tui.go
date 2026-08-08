@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -50,47 +52,88 @@ type tuiCommandResult struct {
 	output string
 }
 
+type tuiResultSource struct {
+	path string
+	line int
+}
+
+type tuiResultLine struct {
+	text        string
+	sourceLine  int
+	firstOfLine bool
+}
+
+var tuiFindingSource = regexp.MustCompile(`(?m)^(?:WARNING|ERROR|INFO)\s+HS-[^\s]+\s+([^:\s]+\.(?:md|markdown|html|gohtml)):(\d+):`)
+
+type tuiRemoteContentResult struct {
+	items []contentItem
+	err   error
+}
+
 type tuiSpinnerTick struct{}
 
 type tuiModel struct {
-	project       string
-	screen        tuiScreen
-	menuCursor    int
-	contentCursor int
-	draftFilter   int
-	query         string
-	section       string
-	category      string
-	tag           string
-	from          string
-	to            string
-	filterCursor  int
-	input         tuiInput
-	items         []contentItem
-	err           error
-	result        string
-	command       string
-	resultOffset  int
-	previewSource string
-	previewText   string
-	previewOffset int
-	selectedURL   string
-	urlNote       string
-	height        int
-	running       bool
-	spinner       int
+	project            string
+	remoteURL          string
+	screen             tuiScreen
+	menuCursor         int
+	contentCursor      int
+	draftFilter        int
+	query              string
+	section            string
+	category           string
+	tag                string
+	from               string
+	to                 string
+	filterCursor       int
+	input              tuiInput
+	items              []contentItem
+	err                error
+	result             string
+	command            string
+	resultOffset       int
+	resultFilter       string
+	resultCursor       int
+	previewSource      string
+	previewText        string
+	previewOffset      int
+	previewReturn      tuiScreen
+	resultSources      []tuiResultSource
+	resultSourceCursor int
+	selectedURL        string
+	urlNote            string
+	height             int
+	width              int
+	running            bool
+	spinner            int
 }
 
 // runTUI starts the interactive terminal interface. It deliberately delegates
 // work to the same command handlers used by the non-interactive CLI.
 func runTUI(args []string, out io.Writer) error {
-	project, err := tuiProject(args)
+	project, remoteURL, err := tuiTarget(args)
 	if err != nil {
 		return err
 	}
 	_ = out
-	_, err = tea.NewProgram(newTUIModel(project), tea.WithAltScreen()).Run()
+	model := newTUIModel(project)
+	if remoteURL != "" {
+		model = newRemoteTUIModel(remoteURL)
+	}
+	_, err = tea.NewProgram(model, tea.WithAltScreen()).Run()
 	return err
+}
+
+func tuiTarget(args []string) (project, remoteURL string, err error) {
+	if len(args) >= 1 && args[0] == "--remote" {
+		if len(args) != 2 {
+			return "", "", fmt.Errorf("usage: hs tui [project-directory] | hs tui --remote <base-url>")
+		}
+		remoteURL, err = normalizeBaseURL(args[1])
+		return "", remoteURL, err
+	}
+	project, err = tuiProject(args)
+	return project, "", err
 }
 
 func tuiProject(args []string) (string, error) {
@@ -115,19 +158,36 @@ func tuiProject(args []string) (string, error) {
 }
 
 func newTUIModel(project string) tuiModel {
-	return tuiModel{project: project, height: 24}
+	return tuiModel{project: project, height: 24, width: 100}
 }
 
-func (m tuiModel) Init() tea.Cmd { return nil }
+func newRemoteTUIModel(baseURL string) tuiModel {
+	return tuiModel{remoteURL: baseURL, screen: tuiContent, height: 24, width: 100}
+}
+
+func (m tuiModel) Init() tea.Cmd {
+	if m.remoteURL != "" {
+		return m.loadRemoteContentCmd()
+	}
+	return nil
+}
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.height = msg.Height
+		m.width = msg.Width
 		return m, nil
 	case tuiCommandResult:
 		m.running = false
 		m.result = msg.output
+		m.resultFilter = "all"
+		m.refreshResultSources()
+		m.resultCursor = firstResultFindingLine(m.filteredResult())
+		return m, nil
+	case tuiRemoteContentResult:
+		m.items, m.err = msg.items, msg.err
+		m.contentCursor = 0
 		return m, nil
 	case tuiSpinnerTick:
 		if m.running {
@@ -212,6 +272,9 @@ func (m tuiModel) updateContent(key string) (tea.Model, tea.Cmd) {
 			m.contentCursor = min(len(items)-1, m.contentCursor+m.contentHeight())
 		}
 	case "r":
+		if m.remoteURL != "" {
+			return m, m.loadRemoteContentCmd()
+		}
 		m.loadContent()
 	case "enter":
 		if len(items) > 0 {
@@ -219,6 +282,9 @@ func (m tuiModel) updateContent(key string) (tea.Model, tea.Cmd) {
 		}
 	case "d":
 		if len(items) > 0 {
+			if m.remoteURL != "" {
+				return m, m.startAction([]string{"doctor", "--remote", m.remoteURL})
+			}
 			return m, m.startAction([]string{"doctor", m.project, "--only", "content", "--source", items[m.contentCursor].Source})
 		}
 	case "u":
@@ -256,7 +322,7 @@ func (m tuiModel) updatePreview(key string) (tea.Model, tea.Cmd) {
 	case "pgdown", "space", " ":
 		m.previewOffset = min(maxOffset, m.previewOffset+m.previewHeight())
 	case "esc", "backspace", "enter":
-		m.screen = tuiContent
+		m.screen = m.previewReturn
 	}
 	return m, nil
 }
@@ -406,25 +472,184 @@ func (m tuiModel) updateResult(key string) (tea.Model, tea.Cmd) {
 	if m.running {
 		return m, nil
 	}
-	lines := strings.Split(m.result, "\n")
-	maxOffset := max(0, len(lines)-m.resultHeight())
 	switch key {
 	case "up", "k":
-		m.resultOffset = max(0, m.resultOffset-1)
+		m.moveResultFinding(-1)
 	case "down", "j":
-		m.resultOffset = min(maxOffset, m.resultOffset+1)
+		m.moveResultFinding(1)
 	case "home":
-		m.resultOffset = 0
+		m.resultCursor = firstResultFindingLine(m.filteredResult())
 	case "end":
-		m.resultOffset = maxOffset
+		lines := resultFindingLines(m.filteredResult())
+		if len(lines) > 0 {
+			m.resultCursor = lines[len(lines)-1]
+		}
 	case "pgup":
-		m.resultOffset = max(0, m.resultOffset-m.resultHeight())
+		m.moveResultFinding(-m.resultHeight())
 	case "pgdown", "space", " ":
-		m.resultOffset = min(maxOffset, m.resultOffset+m.resultHeight())
+		m.moveResultFinding(m.resultHeight())
+	case "a":
+		m.setResultFilter("all")
+	case "w":
+		m.setResultFilter("warning")
+	case "e":
+		m.setResultFilter("error")
+	case "i":
+		m.setResultFilter("info")
+	case "v":
+		m.openResultSource()
 	case "esc", "backspace", "enter":
 		m.screen = tuiMenu
 	}
+	m.ensureResultCursorVisible()
 	return m, nil
+}
+
+func (m *tuiModel) setResultFilter(filter string) {
+	m.resultFilter = filter
+	m.resultOffset = 0
+	m.resultSourceCursor = 0
+	m.refreshResultSources()
+	m.resultCursor = firstResultFindingLine(m.filteredResult())
+}
+
+func resultFindingLines(result string) []int {
+	var findings []int
+	for index, line := range strings.Split(result, "\n") {
+		if resultSeverity(line) != "" {
+			findings = append(findings, index)
+		}
+	}
+	return findings
+}
+
+func firstResultFindingLine(result string) int {
+	findings := resultFindingLines(result)
+	if len(findings) == 0 {
+		return 0
+	}
+	return findings[0]
+}
+
+func (m *tuiModel) moveResultFinding(step int) {
+	findings := resultFindingLines(m.filteredResult())
+	if len(findings) == 0 {
+		return
+	}
+	current := 0
+	for index, line := range findings {
+		if line == m.resultCursor {
+			current = index
+			break
+		}
+	}
+	m.resultCursor = findings[min(len(findings)-1, max(0, current+step))]
+	m.ensureResultCursorVisible()
+}
+
+func (m *tuiModel) ensureResultCursorVisible() {
+	cursor := m.resultCursorDisplayLine()
+	if cursor < m.resultOffset {
+		m.resultOffset = cursor
+	}
+	if cursor >= m.resultOffset+m.resultHeight() {
+		m.resultOffset = cursor - m.resultHeight() + 1
+	}
+}
+
+func (m tuiModel) resultCursorDisplayLine() int {
+	for index, line := range m.resultDisplayLines() {
+		if line.sourceLine == m.resultCursor && line.firstOfLine {
+			return index
+		}
+	}
+	return 0
+}
+
+func (m tuiModel) resultDisplayLines() []tuiResultLine {
+	width := max(20, m.width-2)
+	var display []tuiResultLine
+	for sourceLine, line := range strings.Split(m.filteredResult(), "\n") {
+		wrapped := wrapTUIResultLine(line, width)
+		for index, segment := range wrapped {
+			display = append(display, tuiResultLine{text: segment, sourceLine: sourceLine, firstOfLine: index == 0})
+		}
+	}
+	return display
+}
+
+func wrapTUIResultLine(line string, width int) []string {
+	if line == "" || len([]rune(line)) <= width {
+		return []string{line}
+	}
+	runes := []rune(line)
+	var wrapped []string
+	for len(runes) > width {
+		breakAt := width
+		for index := width; index > 0; index-- {
+			if runes[index] == ' ' {
+				breakAt = index
+				break
+			}
+		}
+		if breakAt == 0 {
+			breakAt = width
+		}
+		wrapped = append(wrapped, string(runes[:breakAt]))
+		runes = runes[breakAt:]
+		for len(runes) > 0 && runes[0] == ' ' {
+			runes = runes[1:]
+		}
+	}
+	wrapped = append(wrapped, string(runes))
+	return wrapped
+}
+
+func (m *tuiModel) refreshResultSources() {
+	m.resultSources = resultSources(m.filteredResult())
+	if m.resultSourceCursor >= len(m.resultSources) {
+		m.resultSourceCursor = 0
+	}
+}
+
+func (m tuiModel) filteredResult() string {
+	if m.resultFilter == "" || m.resultFilter == "all" {
+		return m.result
+	}
+	var blocks []string
+	var block []string
+	severity := ""
+	flush := func() {
+		if severity == m.resultFilter && len(block) > 0 {
+			blocks = append(blocks, strings.Join(block, "\n"))
+		}
+		block, severity = nil, ""
+	}
+	for _, line := range strings.Split(m.result, "\n") {
+		if next := resultSeverity(line); next != "" {
+			flush()
+			severity = next
+			block = append(block, line)
+			continue
+		}
+		if severity != "" {
+			block = append(block, line)
+		}
+	}
+	flush()
+	if len(blocks) == 0 {
+		return "No " + m.resultFilter + " findings."
+	}
+	return strings.Join(blocks, "\n")
+}
+
+func resultSeverity(line string) string {
+	for _, severity := range []string{"warning", "error", "info"} {
+		if strings.HasPrefix(line, strings.ToUpper(severity)+" HS-") {
+			return severity
+		}
+	}
+	return ""
 }
 
 func (m *tuiModel) loadContent() {
@@ -432,9 +657,43 @@ func (m *tuiModel) loadContent() {
 	m.contentCursor = 0
 }
 
+func (m tuiModel) loadRemoteContentCmd() tea.Cmd {
+	return func() tea.Msg {
+		items, err := fetchIndex(m.remoteURL)
+		if err != nil {
+			urls, sitemapErr := publishedSitemapURLs(m.remoteURL, 100, 20*time.Second)
+			if sitemapErr != nil {
+				return tuiRemoteContentResult{err: fmt.Errorf("index.json: %v; sitemap.xml: %w", err, sitemapErr)}
+			}
+			content := make([]contentItem, 0, len(urls))
+			for _, target := range urls {
+				parsed, _ := url.Parse(target)
+				title := parsed.Path
+				if title == "" {
+					title = "/"
+				}
+				content = append(content, contentItem{Title: title, URL: target, GeneratedURL: target, Source: target})
+			}
+			return tuiRemoteContentResult{items: content}
+		}
+		content := make([]contentItem, 0, len(items))
+		for _, item := range items {
+			content = append(content, contentItem{Title: item.Title, Date: parseDate(firstNonEmpty(item.Date, item.PublishDate)), Tags: item.Tags, Words: wordCount(firstNonEmpty(item.Content, item.Summary, item.Description)), URL: item.URL, GeneratedURL: item.URL, Source: item.URL, Body: firstNonEmpty(item.Content, item.Summary, item.Description)})
+		}
+		sort.Slice(content, func(i, j int) bool { return content[i].Date.After(content[j].Date) })
+		return tuiRemoteContentResult{items: content}
+	}
+}
+
 func (m *tuiModel) openContent(item contentItem) {
 	m.previewSource = item.Source
 	m.previewOffset = 0
+	m.previewReturn = tuiContent
+	if m.remoteURL != "" {
+		m.previewText = fmt.Sprintf("%s\n\n%s", item.Title, item.Body)
+		m.screen = tuiPreview
+		return
+	}
 	data, err := os.ReadFile(filepath.Join(m.project, filepath.FromSlash(item.Source)))
 	if err != nil {
 		m.previewText = fmt.Sprintf("Could not read %s: %v", item.Source, err)
@@ -444,7 +703,67 @@ func (m *tuiModel) openContent(item contentItem) {
 	m.screen = tuiPreview
 }
 
+func resultSources(result string) []tuiResultSource {
+	seen := map[string]bool{}
+	var sources []tuiResultSource
+	for _, match := range tuiFindingSource.FindAllStringSubmatch(result, -1) {
+		line := 0
+		fmt.Sscanf(match[2], "%d", &line)
+		key := match[1] + ":" + match[2]
+		if !seen[key] {
+			seen[key] = true
+			sources = append(sources, tuiResultSource{path: filepath.ToSlash(match[1]), line: line})
+		}
+	}
+	return sources
+}
+
+func (m *tuiModel) openResultSource() {
+	lines := strings.Split(m.filteredResult(), "\n")
+	if m.resultCursor < 0 || m.resultCursor >= len(lines) {
+		return
+	}
+	match := tuiFindingSource.FindStringSubmatch(lines[m.resultCursor])
+	if len(match) != 3 {
+		return
+	}
+	line := 0
+	fmt.Sscanf(match[2], "%d", &line)
+	source := tuiResultSource{path: filepath.ToSlash(match[1]), line: line}
+	data, err := os.ReadFile(filepath.Join(m.project, filepath.FromSlash(source.path)))
+	if err != nil {
+		m.previewSource = source.path
+		m.previewText = fmt.Sprintf("Could not read %s: %v", source.path, err)
+	} else {
+		m.previewSource = fmt.Sprintf("%s:%d", source.path, source.line)
+		m.previewText = numberedSourceExcerpt(string(data), source.line)
+	}
+	m.previewOffset = 0
+	m.previewReturn = tuiResult
+	m.screen = tuiPreview
+}
+
+func numberedSourceExcerpt(source string, focusLine int) string {
+	lines := strings.Split(source, "\n")
+	start := max(0, focusLine-4)
+	end := min(len(lines), focusLine+3)
+	var excerpt strings.Builder
+	for i := start; i < end; i++ {
+		marker := " "
+		if i+1 == focusLine {
+			marker = ">"
+		}
+		fmt.Fprintf(&excerpt, "%s %4d | %s\n", marker, i+1, lines[i])
+	}
+	return strings.TrimSuffix(excerpt.String(), "\n")
+}
+
 func (m *tuiModel) showContentURL(item contentItem) {
+	if m.remoteURL != "" {
+		m.selectedURL = item.URL
+		m.urlNote = "URL from the published site's index.json."
+		return
+	}
 	files, err := hugoConfigFiles(m.project)
 	if err != nil {
 		m.selectedURL = item.GeneratedURL
@@ -571,13 +890,21 @@ func (m tuiModel) contentView() string {
 	var view strings.Builder
 	items := m.filteredItems()
 	stats := makeContentStats(items)
-	fmt.Fprintf(&view, "Content browser | %s\n", m.filterDescription())
+	title := "Content browser"
+	if m.remoteURL != "" {
+		title = "Published-site browser | " + m.remoteURL
+	}
+	fmt.Fprintf(&view, "%s | %s\n", title, m.filterDescription())
 	if m.input == tuiSearchInput {
 		fmt.Fprintf(&view, "Search: %s█\n", m.query)
 	} else if m.query != "" {
 		fmt.Fprintf(&view, "Search: %s\n", m.query)
 	}
-	view.WriteString("/ search • f filters • c clear • ↑/↓ select • PgUp/PgDn scroll • Enter view • d doctor • u URL • r refresh • Esc back\n\n")
+	if m.remoteURL != "" {
+		view.WriteString("/ search • f filters • c clear • ↑/↓ select • PgUp/PgDn scroll • Enter details • d remote doctor • u URL • r refresh • Esc back\n\n")
+	} else {
+		view.WriteString("/ search • f filters • c clear • ↑/↓ select • PgUp/PgDn scroll • Enter view • d doctor • u URL • r refresh • Esc back\n\n")
+	}
 	if m.err != nil {
 		fmt.Fprintf(&view, "Could not read content: %v\n", m.err)
 		return view.String()
@@ -686,12 +1013,23 @@ func (m tuiModel) resultView() string {
 		view.WriteString("The result will appear here when the command finishes.\n")
 		return view.String()
 	}
-	lines := strings.Split(m.result, "\n")
-	end := min(len(lines), m.resultOffset+m.resultHeight())
-	for _, line := range lines[m.resultOffset:end] {
-		view.WriteString(line + "\n")
+	lines := strings.Split(m.filteredResult(), "\n")
+	display := m.resultDisplayLines()
+	end := min(len(display), m.resultOffset+m.resultHeight())
+	for index := m.resultOffset; index < end; index++ {
+		marker := "  "
+		if display[index].sourceLine == m.resultCursor && display[index].firstOfLine && resultSeverity(lines[m.resultCursor]) != "" {
+			marker = "> "
+		}
+		view.WriteString(marker + display[index].text + "\n")
 	}
-	view.WriteString("\n↑/↓ scroll • PgUp/PgDn or Space page • Home/End jump • Enter or Esc back • q quit\n")
+	if len(lines) > m.resultCursor && m.resultCursor >= 0 {
+		if match := tuiFindingSource.FindStringSubmatch(lines[m.resultCursor]); len(match) == 3 {
+			fmt.Fprintf(&view, "\nSelected source: %s:%s • v inspect\n", match[1], match[2])
+		}
+	}
+	fmt.Fprintf(&view, "a all • w warnings • e errors • i info | Showing: %s\n", m.resultFilter)
+	view.WriteString("↑/↓ select • PgUp/PgDn or Space page • Home/End jump • Enter or Esc back • q quit\n")
 	return view.String()
 }
 
