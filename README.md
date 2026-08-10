@@ -2,6 +2,8 @@
 
 `hs` is a command-line toolkit for inspecting, validating, and operating Hugo websites. It works against a local Hugo project and, when configured, its published JSON search index.
 
+The project documentation is maintained as a Docsy Hugo site in [`hs-docs/`](hs-docs/). When GitHub Pages is enabled for this repository, merged documentation changes publish at `https://jjanuszczak.github.io/hugo-site-tools/`.
+
 ## Install
 
 ```sh
