@@ -408,6 +408,15 @@ func (m tuiModel) updateCampaign(key string) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) openCampaigns() {
 	policy, err := loadCampaignPolicy(m.project)
+	if err != nil && strings.Contains(err.Error(), "campaign policy is missing") {
+		var out bytes.Buffer
+		if initErr := run([]string{"campaign", "init", m.project}, &out, &bytes.Buffer{}); initErr != nil {
+			m.campaignMessage = fmt.Sprintf("Could not create campaign policy: %v", initErr)
+			m.screen = tuiCampaigns
+			return
+		}
+		policy, err = loadCampaignPolicy(m.project)
+	}
 	if err != nil {
 		m.campaignMessage = fmt.Sprintf("Could not load campaign policy: %v", err)
 		m.screen = tuiCampaigns
@@ -443,7 +452,7 @@ func (m tuiModel) updateCampaigns(key string) (tea.Model, tea.Cmd) {
 				m.campaignMessage = "That campaign is already retired."
 			}
 		}
-	case "esc", "backspace":
+	case "enter", "esc", "backspace":
 		m.screen = tuiMenu
 	}
 	return m, nil
@@ -1244,7 +1253,7 @@ func (m tuiModel) campaignsView() string {
 			fmt.Fprintf(&view, "%s%-9s %-28s %s\n", marker, campaign.Status, campaign.Key, campaign.Label)
 		}
 	}
-	view.WriteString("\n↑/↓ select • a add campaign • r retire selected active campaign • Esc back\n")
+	view.WriteString("\n↑/↓ select • a add campaign • r retire selected active campaign • Enter or Esc back\n")
 	return view.String()
 }
 

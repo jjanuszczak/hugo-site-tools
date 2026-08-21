@@ -496,6 +496,27 @@ func TestTUICampaignRegistryAddsAndRetiresCampaign(t *testing.T) {
 	}
 }
 
+func TestTUICampaignRegistryInitializesPolicyAndCanExit(t *testing.T) {
+	site := t.TempDir()
+	m := newTUIModel(site)
+	m.openCampaigns()
+	if m.screen != tuiCampaigns || m.campaignPolicy.PolicyVersion != 1 {
+		t.Fatalf("campaign policy = %#v", m)
+	}
+	if _, err := os.Stat(filepath.Join(site, ".hs.toml")); err != nil {
+		t.Fatalf("campaign init did not create policy: %v", err)
+	}
+	updated, _ := m.updateCampaigns("enter")
+	if updated.(tuiModel).screen != tuiMenu {
+		t.Fatalf("Enter did not return to menu: %#v", updated)
+	}
+	m.screen = tuiCampaigns
+	updated, _ = m.updateCampaigns("esc")
+	if updated.(tuiModel).screen != tuiMenu {
+		t.Fatalf("Esc did not return to menu: %#v", updated)
+	}
+}
+
 func TestTUIPageNavigation(t *testing.T) {
 	m := newTUIModel(t.TempDir())
 	m.height = 12
