@@ -102,8 +102,10 @@ For a published site, use `hs tui --remote https://example.com`. It reads the si
 
 `hs campaign` creates strict, project-owned UTM links for local Hugo content.
 Start by creating the GA4 policy dictionary in `.hs.toml`, then define a
-campaign before generating links. The selected-content TUI action (`l`) uses
-the same policy and generator.
+campaign before generating links. In the local TUI, choose `Campaigns` from
+the main menu to add or retire campaigns; from the content browser, press `l`
+to generate a link for the selected page. The form supports an optional
+creative or placement value for `utm_content`.
 
 ```sh
 hs campaign init .

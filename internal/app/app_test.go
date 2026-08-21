@@ -435,10 +435,64 @@ func TestTUICreatesCampaignLinkForSelectedContent(t *testing.T) {
 	if result.campaignSource != "x" || result.campaignMedium != "social" {
 		t.Fatalf("source selection = %#v", result)
 	}
+	updated, _ = result.updateCampaign("down")
+	result = updated.(tuiModel)
+	updated, _ = result.updateCampaign("down")
+	result = updated.(tuiModel)
 	updated, _ = result.updateCampaign("enter")
 	result = updated.(tuiModel)
-	if result.screen != tuiURL || !strings.Contains(result.selectedURL, "utm_source=x") || !strings.Contains(result.selectedURL, "utm_medium=social") {
+	for _, key := range []string{"c", "e", "o", "-", "p", "o", "s", "t", "enter"} {
+		updated, _ = result.updateCampaign(key)
+		result = updated.(tuiModel)
+	}
+	updated, _ = result.updateCampaign("up")
+	result = updated.(tuiModel)
+	updated, _ = result.updateCampaign("enter")
+	result = updated.(tuiModel)
+	if result.screen != tuiURL || !strings.Contains(result.selectedURL, "utm_source=x") || !strings.Contains(result.selectedURL, "utm_medium=social") || !strings.Contains(result.selectedURL, "utm_content=ceo-post") {
 		t.Fatalf("campaign URL = %#v", result)
+	}
+}
+
+func TestTUICampaignRegistryAddsAndRetiresCampaign(t *testing.T) {
+	site := t.TempDir()
+	if err := os.WriteFile(filepath.Join(site, "hugo.toml"), []byte(`baseURL = "https://example.test/"`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := run([]string{"campaign", "init", site}, &out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	m := newTUIModel(site)
+	m.openCampaigns()
+	updated, _ := m.updateCampaigns("a")
+	result := updated.(tuiModel)
+	for _, field := range [][]string{{"a", "l", "w", "a", "y", "s", "-", "o", "n"}, {"A", "l", "w", "a", "y", "s", " ", "o", "n"}, {"C", "o", "n", "t", "i", "n", "u", "o", "u", "s"}} {
+		updated, _ = result.updateCampaignAdd("enter")
+		result = updated.(tuiModel)
+		for _, key := range field {
+			updated, _ = result.updateCampaignAdd(key)
+			result = updated.(tuiModel)
+		}
+		updated, _ = result.updateCampaignAdd("enter")
+		result = updated.(tuiModel)
+		updated, _ = result.updateCampaignAdd("down")
+		result = updated.(tuiModel)
+	}
+	updated, _ = result.updateCampaignAdd("s")
+	result = updated.(tuiModel)
+	if result.screen != tuiCampaigns || len(result.campaignPolicy.Campaigns) != 1 || result.campaignPolicy.Campaigns[0].Key != "always-on" {
+		t.Fatalf("campaign registry = %#v", result)
+	}
+	updated, _ = result.updateCampaigns("r")
+	result = updated.(tuiModel)
+	if result.screen != tuiCampaignRetire {
+		t.Fatalf("retire confirmation = %#v", result)
+	}
+	updated, _ = result.updateCampaignRetire("enter")
+	result = updated.(tuiModel)
+	if result.screen != tuiCampaigns || result.campaignPolicy.Campaigns[0].Status != "retired" {
+		t.Fatalf("retired registry = %#v", result)
 	}
 }
 
