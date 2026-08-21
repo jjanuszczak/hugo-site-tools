@@ -7,7 +7,7 @@ The project documentation is maintained as a Docsy Hugo site in [`hs-docs/`](hs-
 ## Install
 
 ```sh
-go install github.com/johnjanuszczak/hugo-site-tools/cmd/hs@latest
+go install github.com/jjanuszczak/hugo-site-tools/cmd/hs@latest
 ```
 
 For local development:

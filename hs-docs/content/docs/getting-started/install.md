@@ -7,7 +7,7 @@ description: Install the hs command-line toolkit.
 Install the latest released version with Go:
 
 ```sh
-go install github.com/johnjanuszczak/hugo-site-tools/cmd/hs@latest
+go install github.com/jjanuszczak/hugo-site-tools/cmd/hs@latest
 ```
 
 For local repository development, build the executable instead:

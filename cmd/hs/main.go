@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/johnjanuszczak/hugo-site-tools/internal/app"
+	"github.com/jjanuszczak/hugo-site-tools/internal/app"
 )
 
 func main() {

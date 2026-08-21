@@ -1,4 +1,4 @@
-module github.com/johnjanuszczak/hugo-site-tools
+module github.com/jjanuszczak/hugo-site-tools
 
 go 1.26
 
