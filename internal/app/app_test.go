@@ -449,6 +449,11 @@ func TestTUICreatesCampaignLinkForSelectedContent(t *testing.T) {
 	result = updated.(tuiModel)
 	updated, _ = result.updateCampaign("enter")
 	result = updated.(tuiModel)
+	if result.screen != tuiCampaignReview || !strings.Contains(result.campaignReviewView(), "Expected GA4 channel: Organic Social") {
+		t.Fatalf("campaign review = %#v", result)
+	}
+	updated, _ = result.updateCampaignReview("enter")
+	result = updated.(tuiModel)
 	if result.screen != tuiURL || !strings.Contains(result.selectedURL, "utm_source=x") || !strings.Contains(result.selectedURL, "utm_medium=social") || !strings.Contains(result.selectedURL, "utm_content=ceo-post") {
 		t.Fatalf("campaign URL = %#v", result)
 	}

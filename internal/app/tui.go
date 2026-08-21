@@ -24,7 +24,9 @@ const (
 	tuiPreview
 	tuiURL
 	tuiCampaign
+	tuiCampaignReview
 	tuiCampaigns
+	tuiCampaignInspect
 	tuiCampaignAdd
 	tuiCampaignRetire
 	tuiResult
@@ -37,6 +39,13 @@ var tuiActions = []string{
 	"Audit SEO",
 	"Audit links",
 	"Campaigns",
+}
+
+func (m tuiModel) menuActions() []string {
+	if m.remoteURL != "" {
+		return tuiActions[:5]
+	}
+	return tuiActions
 }
 
 var tuiDraftFilters = []string{"All content", "Drafts only", "Published only"}
@@ -118,6 +127,7 @@ type tuiModel struct {
 	campaignSource     string
 	campaignMedium     string
 	campaignContent    string
+	campaignLink       campaignLinkResult
 	campaignCursor     int
 	campaignAddField   int
 	campaignDraftKey   string
@@ -236,8 +246,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateURL(key)
 		case tuiCampaign:
 			return m.updateCampaign(key)
+		case tuiCampaignReview:
+			return m.updateCampaignReview(key)
 		case tuiCampaigns:
 			return m.updateCampaigns(key)
+		case tuiCampaignInspect:
+			return m.updateCampaignInspect(key)
 		case tuiCampaignAdd:
 			return m.updateCampaignAdd(key)
 		case tuiCampaignRetire:
@@ -250,19 +264,20 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) updateMenu(key string) (tea.Model, tea.Cmd) {
+	actions := m.menuActions()
 	switch key {
 	case "up", "k":
-		m.menuCursor = (m.menuCursor + len(tuiActions) - 1) % len(tuiActions)
+		m.menuCursor = (m.menuCursor + len(actions) - 1) % len(actions)
 	case "down", "j":
-		m.menuCursor = (m.menuCursor + 1) % len(tuiActions)
+		m.menuCursor = (m.menuCursor + 1) % len(actions)
 	case "home":
 		m.menuCursor = 0
 	case "end":
-		m.menuCursor = len(tuiActions) - 1
+		m.menuCursor = len(actions) - 1
 	case "pgup":
 		m.menuCursor = max(0, m.menuCursor-5)
 	case "pgdown", "space", " ":
-		m.menuCursor = min(len(tuiActions)-1, m.menuCursor+5)
+		m.menuCursor = min(len(actions)-1, m.menuCursor+5)
 	case "enter":
 		if m.menuCursor == 0 {
 			m.loadContent()
@@ -396,13 +411,25 @@ func (m tuiModel) updateCampaign(key string) (tea.Model, tea.Cmd) {
 		result, err := createCampaignLink(m.project, m.campaignItem.Source, m.campaignKey, m.campaignSource, m.campaignMedium, m.campaignContent)
 		if err != nil {
 			m.selectedURL, m.urlNote = "", err.Error()
+			m.screen = tuiURL
 		} else {
-			m.selectedURL = result.URL
-			m.urlNote = fmt.Sprintf("Expected GA4 channel: %s. Copy the URL, then press Enter or Esc to return.", result.ExpectedChannel)
+			m.campaignLink = result
+			m.screen = tuiCampaignReview
 		}
-		m.screen = tuiURL
 	case "esc", "backspace":
 		m.screen = tuiContent
+	}
+	return m, nil
+}
+
+func (m tuiModel) updateCampaignReview(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "enter":
+		m.selectedURL = m.campaignLink.URL
+		m.urlNote = fmt.Sprintf("Expected GA4 channel: %s. Copy the URL, then press Enter or Esc to return.", m.campaignLink.ExpectedChannel)
+		m.screen = tuiURL
+	case "esc", "backspace":
+		m.screen = tuiCampaign
 	}
 	return m, nil
 }
@@ -450,6 +477,10 @@ func (m tuiModel) updateCampaigns(key string) (tea.Model, tea.Cmd) {
 			m.campaignDraftKey, m.campaignDraftLabel, m.campaignDraftDesc = selected.Key, selected.Label, selected.Description
 			m.campaignAddField, m.campaignEditing, m.campaignMessage, m.screen = 1, true, "", tuiCampaignAdd
 		}
+	case "i":
+		if len(m.campaignPolicy.Campaigns) > 0 {
+			m.screen = tuiCampaignInspect
+		}
 	case "r":
 		if len(m.campaignPolicy.Campaigns) > 0 {
 			selected := m.campaignPolicy.Campaigns[m.campaignCursor]
@@ -461,6 +492,13 @@ func (m tuiModel) updateCampaigns(key string) (tea.Model, tea.Cmd) {
 		}
 	case "enter", "esc", "backspace":
 		m.screen = tuiMenu
+	}
+	return m, nil
+}
+
+func (m tuiModel) updateCampaignInspect(key string) (tea.Model, tea.Cmd) {
+	if key == "enter" || key == "esc" || key == "backspace" {
+		m.screen = tuiCampaigns
 	}
 	return m, nil
 }
@@ -1140,8 +1178,12 @@ func (m tuiModel) View() string {
 		return m.urlView()
 	case tuiCampaign:
 		return m.campaignView()
+	case tuiCampaignReview:
+		return m.campaignReviewView()
 	case tuiCampaigns:
 		return m.campaignsView()
+	case tuiCampaignInspect:
+		return m.campaignInspectView()
 	case tuiCampaignAdd:
 		return m.campaignAddView()
 	case tuiCampaignRetire:
@@ -1157,7 +1199,7 @@ func (m tuiModel) menuView() string {
 	var view strings.Builder
 	fmt.Fprintf(&view, "hs | Hugo site tools\n%s\n\n", m.project)
 	view.WriteString("Choose an action\n\n")
-	for i, action := range tuiActions {
+	for i, action := range m.menuActions() {
 		marker := "  "
 		if i == m.menuCursor {
 			marker = "> "
@@ -1265,6 +1307,10 @@ func (m tuiModel) campaignView() string {
 	return view.String()
 }
 
+func (m tuiModel) campaignReviewView() string {
+	return fmt.Sprintf("Review campaign link\n\n%s\n\nCampaign: %s\nSource / medium: %s / %s\nExpected GA4 channel: %s\n\nEnter confirm • Esc back\n", m.campaignLink.URL, m.campaignLink.Campaign, m.campaignLink.Source, m.campaignLink.Medium, m.campaignLink.ExpectedChannel)
+}
+
 func (m tuiModel) campaignsView() string {
 	var view strings.Builder
 	view.WriteString("Campaign registry\n\n")
@@ -1282,8 +1328,16 @@ func (m tuiModel) campaignsView() string {
 			fmt.Fprintf(&view, "%s%-9s %-28s %s\n", marker, campaign.Status, campaign.Key, campaign.Label)
 		}
 	}
-	view.WriteString("\n↑/↓ select • a add • e edit selected • r retire selected active campaign • Enter or Esc back\n")
+	view.WriteString("\n↑/↓ select • a add • e edit • i inspect • r retire selected active campaign • Enter or Esc back\n")
 	return view.String()
+}
+
+func (m tuiModel) campaignInspectView() string {
+	if len(m.campaignPolicy.Campaigns) == 0 {
+		return "Campaign details\n\nNo campaign selected.\n"
+	}
+	campaign := m.campaignPolicy.Campaigns[m.campaignCursor]
+	return fmt.Sprintf("Campaign details\n\nKey: %s\nLabel: %s\nStatus: %s\nID: %s\n\n%s\n\nEnter or Esc back\n", campaign.Key, campaign.Label, campaign.Status, firstNonEmpty(campaign.ID, "(none)"), campaign.Description)
 }
 
 func (m tuiModel) campaignAddView() string {

@@ -10,26 +10,28 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 type campaignSource struct {
-	Key            string   `json:"key"`
-	AllowedMediums []string `json:"allowed_mediums"`
+	Key            string   `json:"key" toml:"key"`
+	AllowedMediums []string `json:"allowed_mediums" toml:"allowed_mediums"`
 }
 
 type campaignDefinition struct {
-	Key         string `json:"key"`
-	Label       string `json:"label"`
-	Status      string `json:"status"`
-	Description string `json:"description,omitempty"`
-	ID          string `json:"id,omitempty"`
+	Key         string `json:"key" toml:"key"`
+	Label       string `json:"label" toml:"label"`
+	Status      string `json:"status" toml:"status"`
+	Description string `json:"description,omitempty" toml:"description"`
+	ID          string `json:"id,omitempty" toml:"id"`
 }
 
 type campaignPolicy struct {
-	Strict         bool                 `json:"strict"`
-	PolicyVersion  int                  `json:"policy_version"`
-	AllowedMediums []string             `json:"allowed_mediums"`
-	Sources        []campaignSource     `json:"sources"`
+	Strict         bool                 `json:"strict" toml:"strict"`
+	PolicyVersion  int                  `json:"policy_version" toml:"policy_version"`
+	AllowedMediums []string             `json:"allowed_mediums" toml:"allowed_mediums"`
+	Sources        []campaignSource     `json:"sources" toml:"sources"`
 	Campaigns      []campaignDefinition `json:"campaigns"`
 }
 
@@ -46,7 +48,9 @@ type campaignLinkResult struct {
 }
 
 var campaignSlug = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var campaignToken = regexp.MustCompile(`^[a-z0-9]+(?:[-_][a-z0-9]+)*$`)
 var campaignEmail = regexp.MustCompile(`(?i)[^\s@]+@[^\s@]+\.[^\s@]+`)
+var campaignPhone = regexp.MustCompile(`(?:\+?\d[\d .()\-]{7,}\d)`)
 
 const campaignDefaultConfig = `# Strict GA4 campaign-link policy managed by hs.
 [campaign]
@@ -170,7 +174,7 @@ func runCampaignAdd(args []string, out io.Writer) error {
 	if findCampaign(policy, key) != nil {
 		return fmt.Errorf("campaign %q already exists", key)
 	}
-	if campaignEmail.MatchString(values["label"]) || campaignEmail.MatchString(values["description"]) {
+	if containsCampaignPII(values["label"]) || containsCampaignPII(values["description"]) {
 		return errors.New("campaign labels and descriptions must not contain personal data")
 	}
 	if values["id"] != "" && strings.ContainsAny(values["id"], " \t\n") {
@@ -258,7 +262,7 @@ func runCampaignEdit(args []string, out io.Writer) error {
 			return err
 		}
 	}
-	if campaignEmail.MatchString(values["label"]) || campaignEmail.MatchString(values["description"]) {
+	if containsCampaignPII(values["label"]) || containsCampaignPII(values["description"]) {
 		return errors.New("campaign labels and descriptions must not contain personal data")
 	}
 	policy, err := loadCampaignPolicy(project)
@@ -302,6 +306,27 @@ func rewriteCampaignStanza(project, key string, updates map[string]string) error
 		return fmt.Errorf("campaign %q could not be updated safely", key)
 	}
 	return os.WriteFile(file, []byte(strings.Join(stanzas, "[[campaigns]]")), 0644)
+}
+
+func tomlValue(stanza, key string) string {
+	var values struct {
+		Campaigns []campaignDefinition `toml:"campaigns"`
+	}
+	if err := toml.Unmarshal([]byte("[[campaigns]]"+stanza), &values); err != nil {
+		return ""
+	}
+	if len(values.Campaigns) != 1 {
+		return ""
+	}
+	switch key {
+	case "key":
+		return values.Campaigns[0].Key
+	case "label":
+		return values.Campaigns[0].Label
+	case "status":
+		return values.Campaigns[0].Status
+	}
+	return ""
 }
 
 func runCampaignLink(args []string, out io.Writer) error {
@@ -417,95 +442,15 @@ func loadCampaignPolicy(project string) (campaignPolicy, error) {
 }
 
 func parseCampaignPolicy(data string) (campaignPolicy, error) {
-	policy := campaignPolicy{}
-	section := ""
-	var source *campaignSource
-	var campaign *campaignDefinition
-	for _, raw := range strings.Split(data, "\n") {
-		line := strings.TrimSpace(strings.SplitN(raw, "#", 2)[0])
-		if line == "" {
-			continue
-		}
-		switch line {
-		case "[campaign]":
-			section, source, campaign = "campaign", nil, nil
-			continue
-		case "[[campaign.sources]]":
-			section, source, campaign = "source", &campaignSource{}, nil
-			policy.Sources = append(policy.Sources, *source)
-			source = &policy.Sources[len(policy.Sources)-1]
-			continue
-		case "[[campaigns]]":
-			section, source, campaign = "campaigns", nil, &campaignDefinition{}
-			policy.Campaigns = append(policy.Campaigns, *campaign)
-			campaign = &policy.Campaigns[len(policy.Campaigns)-1]
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
-		switch section {
-		case "campaign":
-			switch key {
-			case "strict":
-				policy.Strict = value == "true"
-			case "policy_version":
-				fmt.Sscan(value, &policy.PolicyVersion)
-			case "allowed_mediums":
-				policy.AllowedMediums = tomlStrings(value)
-			}
-		case "source":
-			if source == nil {
-				continue
-			}
-			if key == "key" {
-				source.Key = tomlString(value)
-			} else if key == "allowed_mediums" {
-				source.AllowedMediums = tomlStrings(value)
-			}
-		case "campaigns":
-			if campaign == nil {
-				continue
-			}
-			switch key {
-			case "key":
-				campaign.Key = tomlString(value)
-			case "label":
-				campaign.Label = tomlString(value)
-			case "status":
-				campaign.Status = tomlString(value)
-			case "description":
-				campaign.Description = tomlString(value)
-			case "id":
-				campaign.ID = tomlString(value)
-			}
-		}
+	var file struct {
+		Campaign  campaignPolicy       `toml:"campaign"`
+		Campaigns []campaignDefinition `toml:"campaigns"`
 	}
-	return policy, nil
-}
-
-func tomlString(value string) string { return strings.Trim(strings.TrimSpace(value), "\"") }
-func tomlStrings(value string) []string {
-	value = strings.Trim(strings.TrimSpace(value), "[]")
-	if value == "" {
-		return nil
+	if err := toml.Unmarshal([]byte(data), &file); err != nil {
+		return campaignPolicy{}, fmt.Errorf("invalid .hs.toml: %w", err)
 	}
-	parts := strings.Split(value, ",")
-	for i := range parts {
-		parts[i] = tomlString(parts[i])
-	}
-	return parts
-}
-func tomlValue(stanza, key string) string {
-	for _, line := range strings.Split(stanza, "\n") {
-		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if ok && strings.TrimSpace(k) == key {
-			return tomlString(v)
-		}
-	}
-	return ""
+	file.Campaign.Campaigns = file.Campaigns
+	return file.Campaign, nil
 }
 
 func validateCampaignPolicy(policy campaignPolicy) error {
@@ -515,16 +460,25 @@ func validateCampaignPolicy(policy campaignPolicy) error {
 	if len(policy.AllowedMediums) == 0 || len(policy.Sources) == 0 {
 		return errors.New("campaign policy must configure allowed mediums and sources")
 	}
+	sources := map[string]bool{}
 	for _, source := range policy.Sources {
 		if err := validateCampaignSlug(source.Key, "source key"); err != nil {
 			return err
 		}
+		if sources[source.Key] {
+			return fmt.Errorf("campaign policy defines source %q more than once", source.Key)
+		}
+		sources[source.Key] = true
 		for _, medium := range source.AllowedMediums {
 			if !hasString(policy.AllowedMediums, medium) {
 				return fmt.Errorf("source %q uses unapproved medium %q", source.Key, medium)
 			}
+			if !campaignToken.MatchString(medium) {
+				return fmt.Errorf("source %q has invalid medium %q", source.Key, medium)
+			}
 		}
 	}
+	campaignKeys := map[string]bool{}
 	for _, campaign := range policy.Campaigns {
 		if err := validateCampaignSlug(campaign.Key, "campaign key"); err != nil {
 			return err
@@ -532,15 +486,26 @@ func validateCampaignPolicy(policy campaignPolicy) error {
 		if campaign.Label == "" || (campaign.Status != "active" && campaign.Status != "retired") {
 			return fmt.Errorf("campaign %q must have a label and active or retired status", campaign.Key)
 		}
+		if campaignKeys[campaign.Key] {
+			return fmt.Errorf("campaign policy defines campaign %q more than once", campaign.Key)
+		}
+		campaignKeys[campaign.Key] = true
+		if containsCampaignPII(campaign.Label) || containsCampaignPII(campaign.Description) || containsCampaignPII(campaign.ID) {
+			return fmt.Errorf("campaign %q contains personal data", campaign.Key)
+		}
 	}
 	return nil
 }
 
 func validateCampaignSlug(value, label string) error {
-	if !campaignSlug.MatchString(value) || campaignEmail.MatchString(value) {
+	if !campaignSlug.MatchString(value) || containsCampaignPII(value) {
 		return fmt.Errorf("%s must be lowercase kebab-case and contain no personal data", label)
 	}
 	return nil
+}
+
+func containsCampaignPII(value string) bool {
+	return campaignEmail.MatchString(value) || campaignPhone.MatchString(value)
 }
 func findCampaign(policy campaignPolicy, key string) *campaignDefinition {
 	for i := range policy.Campaigns {
@@ -575,12 +540,18 @@ func createCampaignLink(project, contentFile, campaignKey, sourceKey, medium, co
 	if source == nil || !hasString(source.AllowedMediums, medium) {
 		return campaignLinkResult{}, fmt.Errorf("source/medium pair %q/%q is not approved", sourceKey, medium)
 	}
-	for label, value := range map[string]string{"campaign": campaignKey, "source": sourceKey, "medium": medium, "content": content} {
+	if sourceKey == "google" && (medium == "cpc" || strings.HasPrefix(medium, "paid")) {
+		return campaignLinkResult{}, errors.New("use Google Ads auto-tagging instead of manual Google UTM links")
+	}
+	for label, value := range map[string]string{"campaign": campaignKey, "source": sourceKey, "content": content} {
 		if value != "" {
 			if err := validateCampaignSlug(value, label); err != nil {
 				return campaignLinkResult{}, err
 			}
 		}
+	}
+	if !campaignToken.MatchString(medium) || containsCampaignPII(medium) {
+		return campaignLinkResult{}, errors.New("medium must be lowercase and contain no personal data")
 	}
 	item, err := campaignContentItem(project, contentFile)
 	if err != nil {
@@ -658,6 +629,9 @@ func validateCampaignURL(project, raw string) (campaignLinkResult, error) {
 	if parsed.Scheme != base.Scheme || parsed.Host != base.Host || !strings.HasPrefix(parsed.Path, base.Path) {
 		return campaignLinkResult{}, errors.New("campaign URL must stay within the configured Hugo baseURL")
 	}
+	if err := validateUTMQuery(parsed.RawQuery); err != nil {
+		return campaignLinkResult{}, err
+	}
 	query := parsed.Query()
 	for _, key := range []string{"utm_source", "utm_medium", "utm_campaign"} {
 		if query.Get(key) == "" {
@@ -668,12 +642,15 @@ func validateCampaignURL(project, raw string) (campaignLinkResult, error) {
 	if sourceKey == "google" && (medium == "cpc" || strings.HasPrefix(medium, "paid")) {
 		return campaignLinkResult{}, errors.New("use Google Ads auto-tagging instead of manual Google UTM links")
 	}
-	for label, value := range map[string]string{"campaign": campaignKey, "source": sourceKey, "medium": medium, "content": content} {
+	for label, value := range map[string]string{"campaign": campaignKey, "source": sourceKey, "content": content} {
 		if value != "" {
 			if err := validateCampaignSlug(value, label); err != nil {
 				return campaignLinkResult{}, err
 			}
 		}
+	}
+	if !campaignToken.MatchString(medium) || containsCampaignPII(medium) {
+		return campaignLinkResult{}, errors.New("medium must be lowercase and contain no personal data")
 	}
 	source := findCampaignSource(policy, sourceKey)
 	if source == nil || !hasString(source.AllowedMediums, medium) {
@@ -684,6 +661,27 @@ func validateCampaignURL(project, raw string) (campaignLinkResult, error) {
 		return campaignLinkResult{}, fmt.Errorf("campaign %q is not configured", campaignKey)
 	}
 	return campaignLinkResult{URL: parsed.String(), Campaign: campaignKey, Medium: medium, Content: content, CampaignID: query.Get("utm_id"), ExpectedChannel: expectedGA4Channel(sourceKey, medium), PolicyVersion: policy.PolicyVersion}, nil
+}
+
+func validateUTMQuery(raw string) error {
+	seen := map[string]bool{}
+	for _, part := range strings.Split(raw, "&") {
+		if part == "" {
+			continue
+		}
+		key, _, _ := strings.Cut(part, "=")
+		decoded, err := url.QueryUnescape(key)
+		if err != nil {
+			return errors.New("campaign URL has an invalid query string")
+		}
+		if strings.HasPrefix(strings.ToLower(decoded), "utm_") {
+			if seen[decoded] {
+				return fmt.Errorf("campaign URL has duplicate %s", decoded)
+			}
+			seen[decoded] = true
+		}
+	}
+	return nil
 }
 
 func expectedGA4Channel(source, medium string) string {
