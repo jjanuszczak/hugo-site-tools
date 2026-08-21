@@ -105,7 +105,9 @@ Start by creating the GA4 policy dictionary in `.hs.toml`, then define a
 campaign before generating links. In the local TUI, choose `Campaigns` from
 the main menu to add or retire campaigns; from the content browser, press `l`
 to generate a link for the selected page. The form supports an optional
-creative or placement value for `utm_content`.
+creative or placement value for `utm_content`, then shows an exact link review
+before confirmation. In the registry, press `e` to edit a campaign's label or
+description, or `i` to inspect its full details.
 
 ```sh
 hs campaign init .
