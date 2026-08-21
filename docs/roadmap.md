@@ -37,6 +37,7 @@ Build these before adding deployment integrations. They solve day-to-day Hugo pr
 | `hs search index [dir]` | Generate, validate, inspect, and query the local `index.json` search index. | Medium |
 | `hs related <content-file>` | Recommend related content from taxonomy and text similarity. | Medium |
 | `hs redirects [dir]` | Generate redirect rules for moved URLs in Netlify, Cloudflare, Nginx, and Apache formats. | Medium |
+| `hs campaign` | Create and validate strict GA4-compatible UTM links for local Hugo content, including a TUI workflow for selected content. | Medium |
 
 ### Phase 3: deployed-site assurance and automation
 

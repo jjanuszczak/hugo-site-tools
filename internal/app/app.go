@@ -210,6 +210,8 @@ func run(args []string, out, errOut io.Writer) error {
 		return runBuild(args[1:], out)
 	case "urls":
 		return runURLs(args[1:], out)
+	case "campaign":
+		return runCampaign(args[1:], out)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -3092,5 +3094,5 @@ func oneLine(s string, max int) string {
 	return s
 }
 func printUsage(out io.Writer) {
-	fmt.Fprintln(out, "hs searches and audits Hugo sites.\n\nUsage:\n  hs site set <base-url>\n  hs site show\n  hs search <terms...> [--limit N] [--json]\n  hs posts [site-directory] [--verbose]\n  hs content <list|search|new|stats> ...\n  hs tui [project-directory] | hs tui --remote <base-url>\n  hs build [project-directory] [--build-drafts] [--build-future] [--format text|json]\n  hs urls [project-directory] [--format text|json] [--compare snapshot.json]\n  hs audit <seo|links> [project-directory] [--remote URL] [--strict] [--format text|json|sarif]\n  hs doctor [project-directory] [--remote URL] [--max-pages N] [--timeout SECONDS] [--only checks] [--source content-file] [--strict] [--format text|json|sarif]")
+	fmt.Fprintln(out, "hs searches and audits Hugo sites.\n\nUsage:\n  hs site set <base-url>\n  hs site show\n  hs search <terms...> [--limit N] [--json]\n  hs posts [site-directory] [--verbose]\n  hs content <list|search|new|stats> ...\n  hs campaign <init|list|add|retire|link|validate> ...\n  hs tui [project-directory] | hs tui --remote <base-url>\n  hs build [project-directory] [--build-drafts] [--build-future] [--format text|json]\n  hs urls [project-directory] [--format text|json] [--compare snapshot.json]\n  hs audit <seo|links> [project-directory] [--remote URL] [--strict] [--format text|json|sarif]\n  hs doctor [project-directory] [--remote URL] [--max-pages N] [--timeout SECONDS] [--only checks] [--source content-file] [--strict] [--format text|json|sarif]")
 }

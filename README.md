@@ -34,6 +34,7 @@ hs tui --remote https://example.com
 hs build .
 hs urls .
 hs doctor .
+hs campaign init .
 ```
 
 The configured site URL is stored in the operating-system configuration directory, for example `~/Library/Application Support/hs/config.json` on macOS. Each search fetches `<base-url>/index.json`, so results remain current.
@@ -85,6 +86,7 @@ hs content stats . --write --draft --output private/site-stats
 | `f` / `c` | Open filters / clear search and filters. |
 | `Enter` | Read the selected Markdown source, including front matter. |
 | `d` | Run the content doctor against the selected source file only. |
+| `l` | Create a GA4 campaign link for the selected local content item. |
 | `u` | Show the selected post's URL, built from Hugo's `baseURL` and generated path. |
 | `r` | Refresh local content. |
 | `Esc` | Return to the previous screen. |
@@ -95,6 +97,31 @@ In the filter screen, use left/right to choose known sections, categories, and t
 Use PgUp/PgDown to move by a page through lists and text, Home/End to jump to the first or last item, and Space as PgDown. While typing a search or filter value, Space enters a space character.
 
 For a published site, use `hs tui --remote https://example.com`. It reads the site's `index.json`, or falls back to `sitemap.xml` when no index is available. It provides a read-only browser with search, filters, post details, direct URLs, refresh, and a remote doctor action. It cannot show drafts or source files, build the site, or create content.
+
+### Create governed GA4 campaign links
+
+`hs campaign` creates strict, project-owned UTM links for local Hugo content.
+Start by creating the GA4 policy dictionary in `.hs.toml`, then define a
+campaign before generating links. The selected-content TUI action (`l`) uses
+the same policy and generator.
+
+```sh
+hs campaign init .
+hs campaign add sea-fintech-thought-leadership . \
+  --label "SEA fintech thought leadership" \
+  --description "Ongoing distribution of long-form advisory content."
+hs campaign link content/articles/payments.md . \
+  --campaign sea-fintech-thought-leadership \
+  --source linkedin --medium social --content ceo-post
+hs campaign validate "https://example.com/articles/payments/?utm_source=linkedin&utm_medium=social&utm_campaign=sea-fintech-thought-leadership&utm_content=ceo-post" .
+```
+
+The default strict policy supports `newsletter/email`, `x/social`,
+`linkedin/social`, and `messenger/social`, with `paid_social` available for
+paid promotion. It rejects unknown source/medium combinations, retired
+campaigns when creating new links, manual Google Ads tagging, and destinations
+outside the Hugo `baseURL`. See [the campaign-link PRD](docs/campaign-links-prd.md)
+for the product policy and remaining scope.
 
 Build and audit results preserve Hugo's complete warning, including any suppression setting. When Hugo identifies a content file, or when `hs` can match a shortcode warning to its content invocation, the result includes the post and line. In the result screen, use `a`, `w`, `e`, or `i` to view all findings, warnings, errors, or information. The `>` marker identifies the selected finding; arrows move it, and `v` previews the selected finding's source when available.
 

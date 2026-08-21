@@ -23,6 +23,7 @@ const (
 	tuiFilters
 	tuiPreview
 	tuiURL
+	tuiCampaign
 	tuiResult
 )
 
@@ -102,6 +103,12 @@ type tuiModel struct {
 	resultSourceCursor int
 	selectedURL        string
 	urlNote            string
+	campaignItem       contentItem
+	campaignPolicy     campaignPolicy
+	campaignField      int
+	campaignKey        string
+	campaignSource     string
+	campaignMedium     string
 	height             int
 	width              int
 	running            bool
@@ -211,6 +218,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updatePreview(key)
 		case tuiURL:
 			return m.updateURL(key)
+		case tuiCampaign:
+			return m.updateCampaign(key)
 		case tuiResult:
 			return m.updateResult(key)
 		}
@@ -287,6 +296,10 @@ func (m tuiModel) updateContent(key string) (tea.Model, tea.Cmd) {
 			}
 			return m, m.startAction([]string{"doctor", m.project, "--only", "content", "--source", items[m.contentCursor].Source})
 		}
+	case "l":
+		if len(items) > 0 && m.remoteURL == "" {
+			m.openCampaign(items[m.contentCursor])
+		}
 	case "u":
 		if len(items) > 0 {
 			m.showContentURL(items[m.contentCursor])
@@ -303,6 +316,87 @@ func (m tuiModel) updateContent(key string) (tea.Model, tea.Cmd) {
 		m.screen = tuiMenu
 	}
 	return m, nil
+}
+
+func (m *tuiModel) openCampaign(item contentItem) {
+	policy, err := loadCampaignPolicy(m.project)
+	if err != nil {
+		m.selectedURL, m.urlNote, m.screen = "", fmt.Sprintf("Could not load campaign policy: %v", err), tuiURL
+		return
+	}
+	if _, err := campaignBaseURL(m.project); err != nil {
+		m.selectedURL, m.urlNote, m.screen = "", err.Error(), tuiURL
+		return
+	}
+	m.campaignKey = ""
+	for _, campaign := range policy.Campaigns {
+		if campaign.Status == "active" {
+			m.campaignKey = campaign.Key
+			break
+		}
+	}
+	if m.campaignKey == "" || len(policy.Sources) == 0 || len(policy.Sources[0].AllowedMediums) == 0 {
+		m.selectedURL, m.urlNote, m.screen = "", "Add an active campaign and an approved source before creating a campaign link.", tuiURL
+		return
+	}
+	m.campaignItem, m.campaignPolicy, m.campaignField = item, policy, 0
+	m.campaignSource = policy.Sources[0].Key
+	m.campaignMedium = policy.Sources[0].AllowedMediums[0]
+	m.screen = tuiCampaign
+}
+
+func (m tuiModel) updateCampaign(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "up", "k":
+		m.campaignField = (m.campaignField + 2) % 3
+	case "down", "j":
+		m.campaignField = (m.campaignField + 1) % 3
+	case "left", "h":
+		m.cycleCampaignValue(-1)
+	case "right", "l":
+		m.cycleCampaignValue(1)
+	case "enter":
+		result, err := createCampaignLink(m.project, m.campaignItem.Source, m.campaignKey, m.campaignSource, m.campaignMedium, "")
+		if err != nil {
+			m.selectedURL, m.urlNote = "", err.Error()
+		} else {
+			m.selectedURL = result.URL
+			m.urlNote = fmt.Sprintf("Expected GA4 channel: %s. Copy the URL, then press Enter or Esc to return.", result.ExpectedChannel)
+		}
+		m.screen = tuiURL
+	case "esc", "backspace":
+		m.screen = tuiContent
+	}
+	return m, nil
+}
+
+func (m *tuiModel) cycleCampaignValue(step int) {
+	if m.campaignField == 0 {
+		var keys []string
+		for _, campaign := range m.campaignPolicy.Campaigns {
+			if campaign.Status == "active" {
+				keys = append(keys, campaign.Key)
+			}
+		}
+		m.campaignKey = cycleTUIFilterValue(m.campaignKey, keys, step)
+		return
+	}
+	if m.campaignField == 1 {
+		keys := make([]string, 0, len(m.campaignPolicy.Sources))
+		for _, source := range m.campaignPolicy.Sources {
+			keys = append(keys, source.Key)
+		}
+		m.campaignSource = cycleTUIFilterValue(m.campaignSource, keys, step)
+		source := findCampaignSource(m.campaignPolicy, m.campaignSource)
+		if source != nil && !hasString(source.AllowedMediums, m.campaignMedium) {
+			m.campaignMedium = source.AllowedMediums[0]
+		}
+		return
+	}
+	source := findCampaignSource(m.campaignPolicy, m.campaignSource)
+	if source != nil {
+		m.campaignMedium = cycleTUIFilterValue(m.campaignMedium, source.AllowedMediums, step)
+	}
 }
 
 func (m tuiModel) updatePreview(key string) (tea.Model, tea.Cmd) {
@@ -864,6 +958,8 @@ func (m tuiModel) View() string {
 		return m.previewView()
 	case tuiURL:
 		return m.urlView()
+	case tuiCampaign:
+		return m.campaignView()
 	case tuiResult:
 		return m.resultView()
 	default:
@@ -903,7 +999,7 @@ func (m tuiModel) contentView() string {
 	if m.remoteURL != "" {
 		view.WriteString("/ search • f filters • c clear • ↑/↓ select • PgUp/PgDn scroll • Enter details • d remote doctor • u URL • r refresh • Esc back\n\n")
 	} else {
-		view.WriteString("/ search • f filters • c clear • ↑/↓ select • PgUp/PgDn scroll • Enter view • d doctor • u URL • r refresh • Esc back\n\n")
+		view.WriteString("/ search • f filters • c clear • ↑/↓ select • PgUp/PgDn scroll • Enter view • d doctor • l campaign link • u URL • r refresh • Esc back\n\n")
 	}
 	if m.err != nil {
 		fmt.Fprintf(&view, "Could not read content: %v\n", m.err)
@@ -958,6 +1054,22 @@ func (m tuiModel) previewView() string {
 
 func (m tuiModel) urlView() string {
 	return fmt.Sprintf("Post URL\n\n%s\n\n%s\nCopy the URL, then press Enter or Esc to return.\n", m.selectedURL, m.urlNote)
+}
+
+func (m tuiModel) campaignView() string {
+	values := []string{m.campaignKey, m.campaignSource, m.campaignMedium}
+	labels := []string{"Campaign", "Source", "Medium"}
+	var view strings.Builder
+	fmt.Fprintf(&view, "Create campaign link\n\n%s\n\n", m.campaignItem.Title)
+	for i, label := range labels {
+		marker := "  "
+		if i == m.campaignField {
+			marker = "> "
+		}
+		fmt.Fprintf(&view, "%s%s: %s\n", marker, label, values[i])
+	}
+	view.WriteString("\n↑/↓ choose field • ←/→ change value • Enter create link • Esc cancel\n")
+	return view.String()
 }
 
 func (m tuiModel) filtersView() string {
