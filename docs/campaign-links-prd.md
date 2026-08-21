@@ -151,6 +151,8 @@ hs campaign list [project-dir] [--format text|json]
 # Define a campaign before using it.
 hs campaign add <key> [project-dir] \
   --label <label> --description <description> [--id <campaign-id>]
+hs campaign edit <key> [project-dir] \
+  --label <label> --description <description>
 hs campaign retire <key> [project-dir]
 
 # Generate a link for a local source item.
@@ -194,8 +196,9 @@ It is unavailable in remote mode.
 6. The result screen displays the link in a selectable, copyable terminal view.
 
 The main TUI menu gains `Campaigns`. This opens a registry screen listing active
-and retired campaigns and allows: add campaign, retire campaign with a clear
-confirmation, and inspect a campaign. Adding a campaign uses the same strict
+and retired campaigns and allows: add campaign, edit the label and description
+of an existing campaign, and retire a campaign with a clear confirmation. The
+campaign key is immutable. Adding or editing a campaign uses the same strict
 validation as the CLI. Retiring never deletes configuration or historic link
 validity.
 

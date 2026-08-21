@@ -73,7 +73,7 @@ allowed_mediums = ["social", "paid_social"]
 
 func runCampaign(args []string, out io.Writer) error {
 	if len(args) == 0 || isHelp(args[0]) {
-		fmt.Fprintln(out, "Usage: hs campaign init [project-directory]\n       hs campaign list [project-directory] [--format text|json]\n       hs campaign add <key> [project-directory] --label LABEL --description DESCRIPTION [--id ID]\n       hs campaign retire <key> [project-directory]\n       hs campaign link <content-file> [project-directory] --campaign KEY --source KEY --medium MEDIUM [--content KEY] [--format text|json]\n       hs campaign validate <url> [project-directory] [--format text|json]")
+		fmt.Fprintln(out, "Usage: hs campaign init [project-directory]\n       hs campaign list [project-directory] [--format text|json]\n       hs campaign add <key> [project-directory] --label LABEL --description DESCRIPTION [--id ID]\n       hs campaign edit <key> [project-directory] --label LABEL --description DESCRIPTION\n       hs campaign retire <key> [project-directory]\n       hs campaign link <content-file> [project-directory] --campaign KEY --source KEY --medium MEDIUM [--content KEY] [--format text|json]\n       hs campaign validate <url> [project-directory] [--format text|json]")
 		return nil
 	}
 	switch args[0] {
@@ -83,6 +83,8 @@ func runCampaign(args []string, out io.Writer) error {
 		return runCampaignList(args[1:], out)
 	case "add":
 		return runCampaignAdd(args[1:], out)
+	case "edit":
+		return runCampaignEdit(args[1:], out)
 	case "retire":
 		return runCampaignRetire(args[1:], out)
 	case "link":
@@ -232,6 +234,74 @@ func runCampaignRetire(args []string, out io.Writer) error {
 	}
 	_, err = fmt.Fprintf(out, "Retired campaign %s\n", key)
 	return err
+}
+
+func runCampaignEdit(args []string, out io.Writer) error {
+	values, positional, err := campaignValues(args, map[string]bool{"label": true, "description": true})
+	if err != nil {
+		return err
+	}
+	if len(positional) == 0 || len(positional) > 2 || values["label"] == "" || values["description"] == "" {
+		return campaignUsage("usage: hs campaign edit <key> [project-directory] --label LABEL --description DESCRIPTION")
+	}
+	key := positional[0]
+	if err := validateCampaignSlug(key, "campaign key"); err != nil {
+		return err
+	}
+	project := ""
+	if len(positional) == 2 {
+		project = positional[1]
+	}
+	if project == "" {
+		project, err = os.Getwd()
+		if err != nil {
+			return err
+		}
+	}
+	if campaignEmail.MatchString(values["label"]) || campaignEmail.MatchString(values["description"]) {
+		return errors.New("campaign labels and descriptions must not contain personal data")
+	}
+	policy, err := loadCampaignPolicy(project)
+	if err != nil {
+		return err
+	}
+	if findCampaign(policy, key) == nil {
+		return fmt.Errorf("campaign %q is not configured", key)
+	}
+	if err := rewriteCampaignStanza(project, key, map[string]string{"label": values["label"], "description": values["description"]}); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "Updated campaign %s\n", key)
+	return err
+}
+
+func rewriteCampaignStanza(project, key string, updates map[string]string) error {
+	file := filepath.Join(project, ".hs.toml")
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	stanzas := strings.Split(string(data), "[[campaigns]]")
+	found := false
+	for i := 1; i < len(stanzas); i++ {
+		if tomlValue(stanzas[i], "key") != key {
+			continue
+		}
+		for field, value := range updates {
+			pattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(field) + `\s*=\s*"[^"]*"\s*$`)
+			replacement := fmt.Sprintf("%s = %q", field, value)
+			if pattern.MatchString(stanzas[i]) {
+				stanzas[i] = pattern.ReplaceAllString(stanzas[i], replacement)
+			} else {
+				stanzas[i] = strings.TrimRight(stanzas[i], "\n") + "\n" + replacement + "\n"
+			}
+		}
+		found = true
+	}
+	if !found {
+		return fmt.Errorf("campaign %q could not be updated safely", key)
+	}
+	return os.WriteFile(file, []byte(strings.Join(stanzas, "[[campaigns]]")), 0644)
 }
 
 func runCampaignLink(args []string, out io.Writer) error {

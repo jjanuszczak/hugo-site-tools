@@ -112,6 +112,9 @@ hs campaign init .
 hs campaign add sea-fintech-thought-leadership . \
   --label "SEA fintech thought leadership" \
   --description "Ongoing distribution of long-form advisory content."
+hs campaign edit sea-fintech-thought-leadership . \
+  --label "SEA fintech thought leadership" \
+  --description "Revised internal campaign context."
 hs campaign link content/articles/payments.md . \
   --campaign sea-fintech-thought-leadership \
   --source linkedin --medium social --content ceo-post

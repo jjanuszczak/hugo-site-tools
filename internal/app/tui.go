@@ -123,6 +123,7 @@ type tuiModel struct {
 	campaignDraftKey   string
 	campaignDraftLabel string
 	campaignDraftDesc  string
+	campaignEditing    bool
 	campaignMessage    string
 	height             int
 	width              int
@@ -442,7 +443,13 @@ func (m tuiModel) updateCampaigns(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "a":
 		m.campaignDraftKey, m.campaignDraftLabel, m.campaignDraftDesc = "", "", ""
-		m.campaignAddField, m.campaignMessage, m.screen = 0, "", tuiCampaignAdd
+		m.campaignAddField, m.campaignEditing, m.campaignMessage, m.screen = 0, false, "", tuiCampaignAdd
+	case "e":
+		if len(m.campaignPolicy.Campaigns) > 0 {
+			selected := m.campaignPolicy.Campaigns[m.campaignCursor]
+			m.campaignDraftKey, m.campaignDraftLabel, m.campaignDraftDesc = selected.Key, selected.Label, selected.Description
+			m.campaignAddField, m.campaignEditing, m.campaignMessage, m.screen = 1, true, "", tuiCampaignAdd
+		}
 	case "r":
 		if len(m.campaignPolicy.Campaigns) > 0 {
 			selected := m.campaignPolicy.Campaigns[m.campaignCursor]
@@ -465,14 +472,36 @@ func (m tuiModel) updateCampaignAdd(key string) (tea.Model, tea.Cmd) {
 	}
 	switch key {
 	case "up", "k":
-		m.campaignAddField = (m.campaignAddField + 2) % 3
+		if m.campaignEditing {
+			if m.campaignAddField == 1 {
+				m.campaignAddField = 2
+			} else {
+				m.campaignAddField = 1
+			}
+		} else {
+			m.campaignAddField = (m.campaignAddField + 2) % 3
+		}
 	case "down", "j":
-		m.campaignAddField = (m.campaignAddField + 1) % 3
+		if m.campaignEditing {
+			if m.campaignAddField == 1 {
+				m.campaignAddField = 2
+			} else {
+				m.campaignAddField = 1
+			}
+		} else {
+			m.campaignAddField = (m.campaignAddField + 1) % 3
+		}
 	case "enter":
-		m.input = tuiCampaignKeyInput + tuiInput(m.campaignAddField)
+		if !m.campaignEditing || m.campaignAddField > 0 {
+			m.input = tuiCampaignKeyInput + tuiInput(m.campaignAddField)
+		}
 	case "s":
 		var out bytes.Buffer
-		err := run([]string{"campaign", "add", m.campaignDraftKey, m.project, "--label", m.campaignDraftLabel, "--description", m.campaignDraftDesc}, &out, &bytes.Buffer{})
+		command := "add"
+		if m.campaignEditing {
+			command = "edit"
+		}
+		err := run([]string{"campaign", command, m.campaignDraftKey, m.project, "--label", m.campaignDraftLabel, "--description", m.campaignDraftDesc}, &out, &bytes.Buffer{})
 		if err != nil {
 			m.campaignMessage = err.Error()
 			return m, nil
@@ -1253,7 +1282,7 @@ func (m tuiModel) campaignsView() string {
 			fmt.Fprintf(&view, "%s%-9s %-28s %s\n", marker, campaign.Status, campaign.Key, campaign.Label)
 		}
 	}
-	view.WriteString("\n↑/↓ select • a add campaign • r retire selected active campaign • Enter or Esc back\n")
+	view.WriteString("\n↑/↓ select • a add • e edit selected • r retire selected active campaign • Enter or Esc back\n")
 	return view.String()
 }
 
@@ -1262,7 +1291,11 @@ func (m tuiModel) campaignAddView() string {
 	labels := []string{"Campaign key", "Label", "Description"}
 	inputs := []tuiInput{tuiCampaignKeyInput, tuiCampaignLabelInput, tuiCampaignDescriptionInput}
 	var view strings.Builder
-	view.WriteString("Add campaign\n\n")
+	if m.campaignEditing {
+		view.WriteString("Edit campaign\n\n")
+	} else {
+		view.WriteString("Add campaign\n\n")
+	}
 	if m.campaignMessage != "" {
 		fmt.Fprintf(&view, "%s\n\n", m.campaignMessage)
 	}
@@ -1272,6 +1305,9 @@ func (m tuiModel) campaignAddView() string {
 			marker = "> "
 		}
 		value := values[i]
+		if m.campaignEditing && i == 0 {
+			value += " (immutable)"
+		}
 		if m.input == inputs[i] {
 			value += "█"
 		}

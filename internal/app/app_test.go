@@ -484,6 +484,18 @@ func TestTUICampaignRegistryAddsAndRetiresCampaign(t *testing.T) {
 	if result.screen != tuiCampaigns || len(result.campaignPolicy.Campaigns) != 1 || result.campaignPolicy.Campaigns[0].Key != "always-on" {
 		t.Fatalf("campaign registry = %#v", result)
 	}
+	updated, _ = result.updateCampaigns("e")
+	result = updated.(tuiModel)
+	if result.screen != tuiCampaignAdd || !result.campaignEditing || result.campaignDraftKey != "always-on" || result.campaignAddField != 1 {
+		t.Fatalf("campaign edit form = %#v", result)
+	}
+	result.campaignDraftLabel = "Always-on distribution"
+	result.campaignDraftDesc = "Revised distribution context"
+	updated, _ = result.updateCampaignAdd("s")
+	result = updated.(tuiModel)
+	if result.campaignPolicy.Campaigns[0].Label != "Always-on distribution" || result.campaignPolicy.Campaigns[0].Description != "Revised distribution context" {
+		t.Fatalf("edited registry = %#v", result.campaignPolicy.Campaigns[0])
+	}
 	updated, _ = result.updateCampaigns("r")
 	result = updated.(tuiModel)
 	if result.screen != tuiCampaignRetire {
