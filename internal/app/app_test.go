@@ -406,6 +406,134 @@ func TestTUIShowsURLForSelectedContent(t *testing.T) {
 	}
 }
 
+func TestTUICreatesCampaignLinkForSelectedContent(t *testing.T) {
+	site := t.TempDir()
+	if err := os.WriteFile(filepath.Join(site, "hugo.toml"), []byte(`baseURL = "https://example.test/"`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(site, "content", "entry.md")
+	writePost(t, path, "---\ntitle: Entry\n---")
+	var out bytes.Buffer
+	if err := run([]string{"campaign", "init", site}, &out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"campaign", "add", "always-on", site, "--label", "Always on", "--description", "Continuous distribution"}, &out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	m := newTUIModel(site)
+	m.screen = tuiContent
+	m.items = []contentItem{{Title: "Entry", Source: "content/entry.md", GeneratedURL: "/entry/"}}
+	updated, _ := m.updateContent("l")
+	result := updated.(tuiModel)
+	if result.screen != tuiCampaign || result.campaignKey != "always-on" || result.campaignSource != "newsletter" {
+		t.Fatalf("campaign form = %#v", result)
+	}
+	updated, _ = result.updateCampaign("down")
+	result = updated.(tuiModel)
+	updated, _ = result.updateCampaign("right")
+	result = updated.(tuiModel)
+	if result.campaignSource != "x" || result.campaignMedium != "social" {
+		t.Fatalf("source selection = %#v", result)
+	}
+	updated, _ = result.updateCampaign("down")
+	result = updated.(tuiModel)
+	updated, _ = result.updateCampaign("down")
+	result = updated.(tuiModel)
+	updated, _ = result.updateCampaign("enter")
+	result = updated.(tuiModel)
+	for _, key := range []string{"c", "e", "o", "-", "p", "o", "s", "t", "enter"} {
+		updated, _ = result.updateCampaign(key)
+		result = updated.(tuiModel)
+	}
+	updated, _ = result.updateCampaign("up")
+	result = updated.(tuiModel)
+	updated, _ = result.updateCampaign("enter")
+	result = updated.(tuiModel)
+	if result.screen != tuiCampaignReview || !strings.Contains(result.campaignReviewView(), "Expected GA4 channel: Organic Social") {
+		t.Fatalf("campaign review = %#v", result)
+	}
+	updated, _ = result.updateCampaignReview("enter")
+	result = updated.(tuiModel)
+	if result.screen != tuiURL || !strings.Contains(result.selectedURL, "utm_source=x") || !strings.Contains(result.selectedURL, "utm_medium=social") || !strings.Contains(result.selectedURL, "utm_content=ceo-post") {
+		t.Fatalf("campaign URL = %#v", result)
+	}
+}
+
+func TestTUICampaignRegistryAddsAndRetiresCampaign(t *testing.T) {
+	site := t.TempDir()
+	if err := os.WriteFile(filepath.Join(site, "hugo.toml"), []byte(`baseURL = "https://example.test/"`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := run([]string{"campaign", "init", site}, &out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	m := newTUIModel(site)
+	m.openCampaigns()
+	updated, _ := m.updateCampaigns("a")
+	result := updated.(tuiModel)
+	for _, field := range [][]string{{"a", "l", "w", "a", "y", "s", "-", "o", "n"}, {"A", "l", "w", "a", "y", "s", " ", "o", "n"}, {"C", "o", "n", "t", "i", "n", "u", "o", "u", "s"}} {
+		updated, _ = result.updateCampaignAdd("enter")
+		result = updated.(tuiModel)
+		for _, key := range field {
+			updated, _ = result.updateCampaignAdd(key)
+			result = updated.(tuiModel)
+		}
+		updated, _ = result.updateCampaignAdd("enter")
+		result = updated.(tuiModel)
+		updated, _ = result.updateCampaignAdd("down")
+		result = updated.(tuiModel)
+	}
+	updated, _ = result.updateCampaignAdd("s")
+	result = updated.(tuiModel)
+	if result.screen != tuiCampaigns || len(result.campaignPolicy.Campaigns) != 1 || result.campaignPolicy.Campaigns[0].Key != "always-on" {
+		t.Fatalf("campaign registry = %#v", result)
+	}
+	updated, _ = result.updateCampaigns("e")
+	result = updated.(tuiModel)
+	if result.screen != tuiCampaignAdd || !result.campaignEditing || result.campaignDraftKey != "always-on" || result.campaignAddField != 1 {
+		t.Fatalf("campaign edit form = %#v", result)
+	}
+	result.campaignDraftLabel = "Always-on distribution"
+	result.campaignDraftDesc = "Revised distribution context"
+	updated, _ = result.updateCampaignAdd("s")
+	result = updated.(tuiModel)
+	if result.campaignPolicy.Campaigns[0].Label != "Always-on distribution" || result.campaignPolicy.Campaigns[0].Description != "Revised distribution context" {
+		t.Fatalf("edited registry = %#v", result.campaignPolicy.Campaigns[0])
+	}
+	updated, _ = result.updateCampaigns("r")
+	result = updated.(tuiModel)
+	if result.screen != tuiCampaignRetire {
+		t.Fatalf("retire confirmation = %#v", result)
+	}
+	updated, _ = result.updateCampaignRetire("enter")
+	result = updated.(tuiModel)
+	if result.screen != tuiCampaigns || result.campaignPolicy.Campaigns[0].Status != "retired" {
+		t.Fatalf("retired registry = %#v", result)
+	}
+}
+
+func TestTUICampaignRegistryInitializesPolicyAndCanExit(t *testing.T) {
+	site := t.TempDir()
+	m := newTUIModel(site)
+	m.openCampaigns()
+	if m.screen != tuiCampaigns || m.campaignPolicy.PolicyVersion != 1 {
+		t.Fatalf("campaign policy = %#v", m)
+	}
+	if _, err := os.Stat(filepath.Join(site, ".hs.toml")); err != nil {
+		t.Fatalf("campaign init did not create policy: %v", err)
+	}
+	updated, _ := m.updateCampaigns("enter")
+	if updated.(tuiModel).screen != tuiMenu {
+		t.Fatalf("Enter did not return to menu: %#v", updated)
+	}
+	m.screen = tuiCampaigns
+	updated, _ = m.updateCampaigns("esc")
+	if updated.(tuiModel).screen != tuiMenu {
+		t.Fatalf("Esc did not return to menu: %#v", updated)
+	}
+}
+
 func TestTUIPageNavigation(t *testing.T) {
 	m := newTUIModel(t.TempDir())
 	m.height = 12
@@ -679,6 +807,71 @@ printf '%s' '<html></html>' > "$dest/articles/one/index.html"
 	}
 	if !strings.Contains(out.String(), `"added":["/articles/one/"]`) || !strings.Contains(out.String(), `"removed":["/old/"]`) {
 		t.Fatalf("comparison = %s", out.String())
+	}
+}
+
+func TestCampaignCreatesValidStrictGA4Link(t *testing.T) {
+	site := t.TempDir()
+	if err := os.WriteFile(filepath.Join(site, "hugo.toml"), []byte("baseURL = 'https://example.test/site/'"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	post := filepath.Join(site, "content", "articles", "payments.md")
+	writePost(t, post, "---\ntitle: Payments\n---\nContent")
+	var out bytes.Buffer
+	if err := run([]string{"campaign", "init", site}, &out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := run([]string{"campaign", "add", "sea-fintech-thought-leadership", site, "--label", "SEA fintech thought leadership", "--description", "Ongoing distribution"}, &out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := run([]string{"campaign", "link", post, site, "--campaign", "sea-fintech-thought-leadership", "--source", "linkedin", "--medium", "social", "--content", "ceo-post"}, &out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	want := "https://example.test/site/articles/payments/?utm_campaign=sea-fintech-thought-leadership&utm_content=ceo-post&utm_medium=social&utm_source=linkedin\n"
+	if out.String() != want {
+		t.Fatalf("link = %q, want %q", out.String(), want)
+	}
+	out.Reset()
+	if err := run([]string{"campaign", "validate", strings.TrimSpace(want), site}, &out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Valid campaign link") {
+		t.Fatalf("validation = %q", out.String())
+	}
+}
+
+func TestCampaignRejectsInvalidPairAndAllowsRetiredValidation(t *testing.T) {
+	site := t.TempDir()
+	if err := os.WriteFile(filepath.Join(site, "hugo.toml"), []byte("baseURL = 'https://example.test/'"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	post := filepath.Join(site, "content", "entry.md")
+	writePost(t, post, "---\ntitle: Entry\n---")
+	var out bytes.Buffer
+	for _, args := range [][]string{
+		{"campaign", "init", site},
+		{"campaign", "add", "always-on", site, "--label", "Always on", "--description", "Continuous distribution"},
+	} {
+		if err := run(args, &out, &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+	}
+	err := run([]string{"campaign", "link", post, site, "--campaign", "always-on", "--source", "linkedin", "--medium", "email"}, &out, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "not approved") {
+		t.Fatalf("invalid pairing error = %v", err)
+	}
+	if err := run([]string{"campaign", "retire", "always-on", site}, &out, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	err = run([]string{"campaign", "link", post, site, "--campaign", "always-on", "--source", "linkedin", "--medium", "social"}, &out, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Fatalf("retired creation error = %v", err)
+	}
+	if err := run([]string{"campaign", "validate", "https://example.test/entry/?utm_source=linkedin&utm_medium=social&utm_campaign=always-on", site}, &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("retired validation: %v", err)
 	}
 }
 
