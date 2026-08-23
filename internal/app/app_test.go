@@ -287,6 +287,15 @@ func TestTUIContentFilterAndProjectParsing(t *testing.T) {
 	}
 }
 
+func TestTUIMenuShowsHugoInspiredSplash(t *testing.T) {
+	view := newTUIModel(t.TempDir()).menuView()
+	for _, text := range []string{"| H |", "| U |", "| G |", "| O |", "Site Tools"} {
+		if !strings.Contains(view, text) {
+			t.Fatalf("menu splash is missing %q:\n%s", text, view)
+		}
+	}
+}
+
 func TestTUIShowsCommandResultAfterRunning(t *testing.T) {
 	m := newTUIModel(t.TempDir())
 	m.running = true

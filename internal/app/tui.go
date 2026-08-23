@@ -13,6 +13,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type tuiScreen int
@@ -39,6 +40,29 @@ var tuiActions = []string{
 	"Audit SEO",
 	"Audit links",
 	"Campaigns",
+}
+
+func tuiSplashView() string {
+	parts := []struct {
+		letter string
+		color  string
+	}{
+		{"H", "#ff4088"},
+		{"U", "#0594cb"},
+		{"G", "#33ba91"},
+		{"O", "#ebb951"},
+	}
+	rows := make([][]string, 3)
+	for _, part := range parts {
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color(part.color))
+		for row, text := range []string{"/---\\", "| " + part.letter + " |", "\\---/"} {
+			rows[row] = append(rows[row], style.Render(text))
+		}
+	}
+	return "   " + strings.Join(rows[0], "  ") + "\n" +
+		"   " + strings.Join(rows[1], "  ") + "\n" +
+		"   " + strings.Join(rows[2], "  ") + "\n" +
+		"           Site Tools"
 }
 
 func (m tuiModel) menuActions() []string {
@@ -1197,7 +1221,8 @@ func (m tuiModel) View() string {
 
 func (m tuiModel) menuView() string {
 	var view strings.Builder
-	fmt.Fprintf(&view, "hs | Hugo site tools\n%s\n\n", m.project)
+	view.WriteString(tuiSplashView())
+	fmt.Fprintf(&view, "\n\n%s\n\n", m.project)
 	view.WriteString("Choose an action\n\n")
 	for i, action := range m.menuActions() {
 		marker := "  "
