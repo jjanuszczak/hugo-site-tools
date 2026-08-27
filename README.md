@@ -10,6 +10,10 @@ The project documentation is maintained as a Docsy Hugo site in [`hs-docs/`](hs-
 go install github.com/jjanuszczak/hugo-site-tools/cmd/hs@latest
 ```
 
+`go install` provides the CLI and TUI. Use a release archive or the local build
+script when you need `hs web`, because its browser assets ship beside the
+executable in `web_static/`.
+
 For local development:
 
 ```sh
@@ -31,6 +35,7 @@ hs content search fintech . --section articles --tag "Open Finance"
 hs content stats .
 hs tui .
 hs tui --remote https://example.com
+hs web .
 hs build .
 hs urls .
 hs doctor .
@@ -97,6 +102,24 @@ In the filter screen, use left/right to choose known sections, categories, and t
 Use PgUp/PgDown to move by a page through lists and text, Home/End to jump to the first or last item, and Space as PgDown. While typing a search or filter value, Space enters a space character.
 
 For a published site, use `hs tui --remote https://example.com`. It reads the site's `index.json`, or falls back to `sitemap.xml` when no index is available. It provides a read-only browser with search, filters, post details, direct URLs, refresh, and a remote doctor action. It cannot show drafts or source files, build the site, or create content.
+
+### Use the local web workspace
+
+`hs web` serves a JOG-based graphical workspace on `127.0.0.1`. It shows a dashboard, a filterable content browser with source preview, build, doctor, SEO, and link-audit actions, plus campaign-policy inspection and governed link generation or validation. It is read-only: it never edits content or project configuration, and release actions continue to use temporary Hugo destinations.
+
+```sh
+# Analyze a local project.
+./bin/hs web /path/to/hugo-site
+
+# Analyze a GitHub repository at a specific ref and Hugo-project subdirectory.
+./bin/hs web --repo https://github.com/acme/site --ref main --subdir website
+```
+
+The command prints a local URL containing a short-lived session token. Open that URL in a browser. The server listens only on the loopback interface and stops with `Ctrl-C`.
+
+Repository analysis creates a shallow temporary checkout, records the resolved commit in the workspace, and removes the checkout when the command stops. `git` must be available on `PATH`; private repositories use the developer's local Git credential flow.
+
+The release build copies the required web assets beside the executable in `web_static/`. For a custom development location, set `HS_WEB_ASSETS` to a directory containing `index.html`.
 
 ### Create governed GA4 campaign links
 
