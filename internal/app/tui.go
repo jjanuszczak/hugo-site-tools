@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -94,6 +95,15 @@ type tuiCommandResult struct {
 	output string
 }
 
+type tuiOptions struct {
+	Project      string
+	RemoteURL    string
+	RepoURL      string
+	Ref          string
+	Subdir       string
+	RelativePath bool
+}
+
 type tuiResultSource struct {
 	path string
 	line int
@@ -116,6 +126,8 @@ type tuiSpinnerTick struct{}
 
 type tuiModel struct {
 	project            string
+	projectLabel       string
+	relativePaths      bool
 	remoteURL          string
 	screen             tuiScreen
 	menuCursor         int
@@ -168,23 +180,80 @@ type tuiModel struct {
 // runTUI starts the interactive terminal interface. It deliberately delegates
 // work to the same command handlers used by the non-interactive CLI.
 func runTUI(args []string, out io.Writer) error {
-	project, remoteURL, err := tuiTarget(args)
+	options, err := parseTUIOptions(args)
 	if err != nil {
 		return err
 	}
-	_ = out
-	model := newTUIModel(project)
-	if remoteURL != "" {
-		model = newRemoteTUIModel(remoteURL)
+	project := options.Project
+	projectLabel := ""
+	if options.RepoURL != "" {
+		fmt.Fprintf(out, "Cloning %s", options.RepoURL)
+		if options.Ref != "" {
+			fmt.Fprintf(out, " @ %s", options.Ref)
+		}
+		fmt.Fprintln(out, "...")
+		target, resolveErr := resolveWebTarget(webOptions{RepoURL: options.RepoURL, Ref: options.Ref, Subdir: options.Subdir})
+		if resolveErr != nil {
+			return resolveErr
+		}
+		defer target.close()
+		project = target.Project
+		projectLabel = target.Repository + " @ " + target.Commit[:min(12, len(target.Commit))]
+	}
+	model := newTUIModelWithPathDisplay(project, options.RelativePath)
+	if projectLabel != "" {
+		model.projectLabel = projectLabel
+	}
+	if options.RemoteURL != "" {
+		model = newRemoteTUIModel(options.RemoteURL)
 	}
 	_, err = tea.NewProgram(model, tea.WithAltScreen()).Run()
 	return err
 }
 
+func parseTUIOptions(args []string) (tuiOptions, error) {
+	options := tuiOptions{}
+	filtered := make([]string, 0, len(args))
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch arg {
+		case "--relative-paths":
+			options.RelativePath = true
+		case "--repo", "--ref", "--subdir":
+			if index+1 >= len(args) {
+				return options, fmt.Errorf("%s requires a value", arg)
+			}
+			index++
+			switch arg {
+			case "--repo":
+				options.RepoURL = args[index]
+			case "--ref":
+				options.Ref = args[index]
+			case "--subdir":
+				options.Subdir = args[index]
+			}
+		default:
+			filtered = append(filtered, arg)
+		}
+	}
+	if options.RepoURL != "" {
+		if len(filtered) > 0 {
+			return options, errors.New("usage: hs tui [project-directory] [--relative-paths] | hs tui --repo <github-url> [--ref REF] [--subdir PATH] [--relative-paths]")
+		}
+		return options, nil
+	}
+	if options.Ref != "" || options.Subdir != "" {
+		return options, errors.New("--ref and --subdir require --repo")
+	}
+	project, remoteURL, err := tuiTarget(filtered)
+	options.Project, options.RemoteURL = project, remoteURL
+	return options, err
+}
+
 func tuiTarget(args []string) (project, remoteURL string, err error) {
 	if len(args) >= 1 && args[0] == "--remote" {
 		if len(args) != 2 {
-			return "", "", fmt.Errorf("usage: hs tui [project-directory] | hs tui --remote <base-url>")
+			return "", "", fmt.Errorf("usage: hs tui [project-directory] [--relative-paths] | hs tui --remote <base-url> [--relative-paths]")
 		}
 		remoteURL, err = normalizeBaseURL(args[1])
 		return "", remoteURL, err
@@ -195,7 +264,7 @@ func tuiTarget(args []string) (project, remoteURL string, err error) {
 
 func tuiProject(args []string) (string, error) {
 	if len(args) > 1 || (len(args) == 1 && strings.HasPrefix(args[0], "-")) {
-		return "", fmt.Errorf("usage: hs tui [project-directory]")
+		return "", fmt.Errorf("usage: hs tui [project-directory] [--relative-paths]")
 	}
 	if len(args) == 0 {
 		return os.Getwd()
@@ -216,6 +285,13 @@ func tuiProject(args []string) (string, error) {
 
 func newTUIModel(project string) tuiModel {
 	return tuiModel{project: project, height: 24, width: 100}
+}
+
+func newTUIModelWithPathDisplay(project string, relativeToHome bool) tuiModel {
+	model := newTUIModel(project)
+	model.relativePaths = relativeToHome
+	model.projectLabel = displayPath(project, relativeToHome)
+	return model
 }
 
 func newRemoteTUIModel(baseURL string) tuiModel {
@@ -448,6 +524,28 @@ func (m tuiModel) updateCampaign(key string) (tea.Model, tea.Cmd) {
 
 func (m tuiModel) updateCampaignReview(key string) (tea.Model, tea.Cmd) {
 	switch key {
+	case "c":
+		if err := copyTextToClipboard(m.campaignLink.URL); err != nil {
+			m.campaignMessage = "Could not copy link: " + err.Error()
+		} else {
+			m.campaignMessage = "Campaign link copied to clipboard."
+		}
+	case "s":
+		path := filepath.Join(m.project, "campaign-qr.png")
+		if err := writeCampaignQRCode(path, m.campaignLink.URL); err != nil {
+			m.campaignMessage = "Could not save QR code: " + err.Error()
+		} else {
+			m.campaignMessage = "Saved QR code to " + path
+		}
+	case "p":
+		png, err := campaignQRCodePNG(m.campaignLink.URL)
+		if err != nil {
+			m.campaignMessage = "Could not generate QR code: " + err.Error()
+		} else if err := copyPNGToClipboard(png); err != nil {
+			m.campaignMessage = "Could not copy QR code: " + err.Error()
+		} else {
+			m.campaignMessage = "QR code copied to clipboard."
+		}
 	case "enter":
 		m.selectedURL = m.campaignLink.URL
 		m.urlNote = fmt.Sprintf("Expected GA4 channel: %s. Copy the URL, then press Enter or Esc to return.", m.campaignLink.ExpectedChannel)
@@ -1222,7 +1320,11 @@ func (m tuiModel) View() string {
 func (m tuiModel) menuView() string {
 	var view strings.Builder
 	view.WriteString(tuiSplashView())
-	fmt.Fprintf(&view, "\n\n%s\n\n", m.project)
+	label := m.projectLabel
+	if label == "" {
+		label = displayPath(m.project, m.relativePaths)
+	}
+	fmt.Fprintf(&view, "\n\n%s\n\n", label)
 	view.WriteString("Choose an action\n\n")
 	for i, action := range m.menuActions() {
 		marker := "  "
@@ -1333,7 +1435,11 @@ func (m tuiModel) campaignView() string {
 }
 
 func (m tuiModel) campaignReviewView() string {
-	return fmt.Sprintf("Review campaign link\n\n%s\n\nCampaign: %s\nSource / medium: %s / %s\nExpected GA4 channel: %s\n\nEnter confirm • Esc back\n", m.campaignLink.URL, m.campaignLink.Campaign, m.campaignLink.Source, m.campaignLink.Medium, m.campaignLink.ExpectedChannel)
+	message := ""
+	if m.campaignMessage != "" {
+		message = "\n" + m.campaignMessage + "\n"
+	}
+	return fmt.Sprintf("Review campaign link\n\n%s\n\nCampaign: %s\nSource / medium: %s / %s\nExpected GA4 channel: %s\n%s\n c copy link • s save QR • p copy QR • Enter confirm • Esc back\n", m.campaignLink.URL, m.campaignLink.Campaign, m.campaignLink.Source, m.campaignLink.Medium, m.campaignLink.ExpectedChannel, message)
 }
 
 func (m tuiModel) campaignsView() string {
