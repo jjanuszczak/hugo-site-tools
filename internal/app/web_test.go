@@ -85,6 +85,24 @@ description = "General distribution"
 	if linkResult.Code != http.StatusOK || !strings.Contains(linkResult.Body.String(), "utm_campaign=always-on") {
 		t.Fatalf("campaign link response = %d %s", linkResult.Code, linkResult.Body.String())
 	}
+
+	qrRequest := httptest.NewRequest(http.MethodPost, "/api/campaign-links/qr", bytes.NewBufferString(`{"url":"https://example.test/articles/entry/?utm_campaign=always-on&utm_medium=social&utm_source=linkedin"}`))
+	qrRequest.Header.Set("Content-Type", "application/json")
+	qrRequest.Header.Set("X-HS-Session", "secret")
+	qrResult := httptest.NewRecorder()
+	server.ServeHTTP(qrResult, qrRequest)
+	if qrResult.Code != http.StatusOK || qrResult.Header().Get("Content-Type") != "image/png" || !bytes.HasPrefix(qrResult.Body.Bytes(), []byte{0x89, 'P', 'N', 'G'}) {
+		t.Fatalf("QR response = %d %s", qrResult.Code, qrResult.Body.String())
+	}
+
+	badQRRequest := httptest.NewRequest(http.MethodPost, "/api/campaign-links/qr", bytes.NewBufferString(`{"url":"https://outside.test/?utm_campaign=always-on&utm_medium=social&utm_source=linkedin"}`))
+	badQRRequest.Header.Set("Content-Type", "application/json")
+	badQRRequest.Header.Set("X-HS-Session", "secret")
+	badQRResult := httptest.NewRecorder()
+	server.ServeHTTP(badQRResult, badQRRequest)
+	if badQRResult.Code != http.StatusBadRequest {
+		t.Fatalf("invalid QR status = %d", badQRResult.Code)
+	}
 }
 
 func TestWebOptionsAndRepositoryValidation(t *testing.T) {
