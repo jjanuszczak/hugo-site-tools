@@ -116,4 +116,56 @@ func TestWebOptionsAndRepositoryValidation(t *testing.T) {
 	if err := validateRepoSubdir("../outside"); err == nil {
 		t.Fatal("accepted escaping repository subdirectory")
 	}
+	withRelative, err := parseWebOptions([]string{"--relative-paths"})
+	if err != nil || !withRelative.RelativePaths {
+		t.Fatalf("relative path option = %#v err=%v", withRelative, err)
+	}
+}
+
+func TestTUIOptionsSupportRepositoryTargets(t *testing.T) {
+	options, err := parseTUIOptions([]string{"--repo", "https://github.com/acme/site", "--ref", "main", "--subdir", "website", "--relative-paths"})
+	if err != nil || options.RepoURL != "https://github.com/acme/site" || options.Ref != "main" || options.Subdir != "website" || !options.RelativePath {
+		t.Fatalf("TUI repository options = %#v err=%v", options, err)
+	}
+	if _, err := parseTUIOptions([]string{"--ref", "main"}); err == nil {
+		t.Fatal("accepted --ref without --repo")
+	}
+}
+
+func TestWebJobReportsSupportJSONAndSARIF(t *testing.T) {
+	server, err := newWebServer(webProjectTarget{Kind: "local"}, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.jobs["job-1"] = &webJob{
+		ID:     "job-1",
+		Kind:   "seo",
+		Status: "completed",
+		Result: map[string]interface{}{"findings": []Finding{{Code: "HS-SEO-001", Severity: SeverityWarning, Message: "missing description", Source: "content/entry.md", Line: 4}}},
+	}
+
+	for _, format := range []string{"json", "sarif"} {
+		request := httptest.NewRequest(http.MethodGet, "/api/jobs/job-1/report?format="+format, nil)
+		request.Header.Set("X-HS-Session", "secret")
+		result := httptest.NewRecorder()
+		server.ServeHTTP(result, request)
+		if result.Code != http.StatusOK || !strings.Contains(result.Header().Get("Content-Disposition"), "attachment") {
+			t.Fatalf("%s report response = %d %s", format, result.Code, result.Body.String())
+		}
+		var payload map[string]interface{}
+		if err := json.NewDecoder(result.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode %s report: %v", format, err)
+		}
+		if format == "sarif" && payload["version"] != "2.1.0" {
+			t.Fatalf("SARIF payload = %#v", payload)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/jobs/job-1/report?format=xml", nil)
+	request.Header.Set("X-HS-Session", "secret")
+	result := httptest.NewRecorder()
+	server.ServeHTTP(result, request)
+	if result.Code != http.StatusBadRequest {
+		t.Fatalf("invalid format status = %d", result.Code)
+	}
 }

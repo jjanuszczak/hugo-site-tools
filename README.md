@@ -101,11 +101,11 @@ In the filter screen, use left/right to choose known sections, categories, and t
 
 Use PgUp/PgDown to move by a page through lists and text, Home/End to jump to the first or last item, and Space as PgDown. While typing a search or filter value, Space enters a space character.
 
-For a published site, use `hs tui --remote https://example.com`. It reads the site's `index.json`, or falls back to `sitemap.xml` when no index is available. It provides a read-only browser with search, filters, post details, direct URLs, refresh, and a remote doctor action. It cannot show drafts or source files, build the site, or create content.
+For a published site, use `hs tui --remote https://example.com`. It reads the site's `index.json`, or falls back to `sitemap.xml` when no index is available. It provides a read-only browser with search, filters, post details, direct URLs, refresh, and a remote doctor action. It cannot show drafts or source files, build the site, or create content. To open a GitHub repository directly, use `hs tui --repo https://github.com/owner/repository [--ref REF] [--subdir PATH]`; it creates and removes a shallow temporary checkout automatically.
 
 ### Use the local web workspace
 
-`hs web` serves a JOG-based graphical workspace on `127.0.0.1`. It shows a dashboard, a filterable content browser with source preview, build, doctor, SEO, and link-audit actions, plus campaign-policy inspection and governed link generation or validation. It is read-only: it never edits content or project configuration, and release actions continue to use temporary Hugo destinations.
+`hs web` serves a JOG-based graphical workspace on `127.0.0.1`. It shows a dashboard with content distribution and publishing metrics, including a ChartJOG horizontal section bar chart switchable between page count and word count, a filterable content browser with source preview, build, doctor, SEO, and link-audit actions, plus campaign-policy inspection and governed link generation or validation. Campaign, source, and medium selectors are populated from the project's campaign policy, and release results can be downloaded as JSON or SARIF from the workbench. Use `--relative-paths` with `hs web` or `hs tui` to display local paths relative to the user's home directory instead of full paths. It is read-only: it never edits content or project configuration, and release actions continue to use temporary Hugo destinations.
 
 ```sh
 # Analyze a local project.
@@ -115,7 +115,7 @@ For a published site, use `hs tui --remote https://example.com`. It reads the si
 ./bin/hs web --repo https://github.com/acme/site --ref main --subdir website
 ```
 
-The command prints a local URL containing a short-lived session token. Open that URL in a browser. The server listens only on the loopback interface and stops with `Ctrl-C`.
+The command prints a local URL containing a short-lived session token. On supported desktop systems, it also opens that URL automatically. Set `HS_WEB_NO_BROWSER=1` for headless or SSH sessions. The server listens only on the loopback interface and stops with `Ctrl-C`.
 
 Repository analysis creates a shallow temporary checkout, records the resolved commit in the workspace, and removes the checkout when the command stops. `git` must be available on `PATH`; private repositories use the developer's local Git credential flow.
 

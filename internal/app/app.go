@@ -72,6 +72,28 @@ type exitError struct {
 	message string
 }
 
+func displayPath(path string, relativeToHome bool) string {
+	if !relativeToHome {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	absHome, err := filepath.Abs(home)
+	if err != nil || (absPath != absHome && !strings.HasPrefix(absPath, absHome+string(filepath.Separator))) {
+		return path
+	}
+	if absPath == absHome {
+		return "~"
+	}
+	return "~" + strings.TrimPrefix(absPath, absHome)
+}
+
 func (e *exitError) Error() string { return e.message }
 
 type DoctorOptions struct {
@@ -3096,5 +3118,5 @@ func oneLine(s string, max int) string {
 	return s
 }
 func printUsage(out io.Writer) {
-	fmt.Fprintln(out, "hs searches and audits Hugo sites.\n\nUsage:\n  hs site set <base-url>\n  hs site show\n  hs search <terms...> [--limit N] [--json]\n  hs posts [site-directory] [--verbose]\n  hs content <list|search|new|stats> ...\n  hs campaign <init|list|add|edit|retire|link|validate> ...\n  hs tui [project-directory] | hs tui --remote <base-url>\n  hs web [project-directory] | hs web --repo <github-url> [--ref REF] [--subdir PATH] [--port PORT]\n  hs build [project-directory] [--build-drafts] [--build-future] [--format text|json]\n  hs urls [project-directory] [--format text|json] [--compare snapshot.json]\n  hs audit <seo|links> [project-directory] [--remote URL] [--strict] [--format text|json|sarif]\n  hs doctor [project-directory] [--remote URL] [--max-pages N] [--timeout SECONDS] [--only checks] [--source content-file] [--strict] [--format text|json|sarif]")
+	fmt.Fprintln(out, "hs searches and audits Hugo sites.\n\nUsage:\n  hs site set <base-url>\n  hs site show\n  hs search <terms...> [--limit N] [--json]\n  hs posts [site-directory] [--verbose]\n  hs content <list|search|new|stats> ...\n  hs campaign <init|list|add|edit|retire|link|validate> ...\n  hs tui [project-directory] [--relative-paths] | hs tui --remote <base-url> [--relative-paths] | hs tui --repo <github-url> [--ref REF] [--subdir PATH] [--relative-paths]\n  hs web [project-directory] [--relative-paths] | hs web --repo <github-url> [--ref REF] [--subdir PATH] [--port PORT] [--relative-paths]\n  hs build [project-directory] [--build-drafts] [--build-future] [--format text|json]\n  hs urls [project-directory] [--format text|json] [--compare snapshot.json]\n  hs audit <seo|links> [project-directory] [--remote URL] [--strict] [--format text|json|sarif]\n  hs doctor [project-directory] [--remote URL] [--max-pages N] [--timeout SECONDS] [--only checks] [--source content-file] [--strict] [--format text|json|sarif]")
 }

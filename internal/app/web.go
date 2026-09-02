@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -22,22 +23,26 @@ import (
 )
 
 type webOptions struct {
-	ProjectDir string
-	RepoURL    string
-	Ref        string
-	Subdir     string
-	Port       string
+	ProjectDir    string
+	RepoURL       string
+	Ref           string
+	Subdir        string
+	Port          string
+	RelativePaths bool
 }
 
 type webProjectTarget struct {
-	Project      string
-	Kind         string
-	Repository   string
-	RequestedRef string
-	Commit       string
-	Subdir       string
-	cleanup      func()
+	Project       string
+	Kind          string
+	Repository    string
+	RequestedRef  string
+	Commit        string
+	Subdir        string
+	RelativePaths bool
+	cleanup       func()
 }
+
+const repositoryCloneTimeout = 2 * time.Minute
 
 func (target webProjectTarget) close() {
 	if target.cleanup != nil {
@@ -49,6 +54,13 @@ func runWeb(args []string, out io.Writer) error {
 	opts, err := parseWebOptions(args)
 	if err != nil {
 		return &exitError{code: 2, message: err.Error()}
+	}
+	if opts.RepoURL != "" {
+		fmt.Fprintf(out, "Cloning %s", opts.RepoURL)
+		if opts.Ref != "" {
+			fmt.Fprintf(out, " @ %s", opts.Ref)
+		}
+		fmt.Fprintln(out, "...")
 	}
 	target, err := resolveWebTarget(opts)
 	if err != nil {
@@ -73,6 +85,11 @@ func runWeb(args []string, out io.Writer) error {
 	address := "http://" + listener.Addr().String() + "/?token=" + token
 	fmt.Fprintf(out, "hs web is ready: %s\n", address)
 	fmt.Fprintln(out, "Press Ctrl-C to stop the local server.")
+	if os.Getenv("HS_WEB_NO_BROWSER") == "" {
+		if err := openWebBrowser(address); err != nil {
+			fmt.Fprintf(out, "Could not open browser: %s\n", err)
+		}
+	}
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
@@ -92,10 +109,28 @@ func runWeb(args []string, out io.Writer) error {
 	}
 }
 
+func openWebBrowser(address string) error {
+	var command string
+	var args []string
+	switch runtime.GOOS {
+	case "darwin":
+		command, args = "open", []string{address}
+	case "linux":
+		command, args = "xdg-open", []string{address}
+	case "windows":
+		command, args = "rundll32", []string{"url.dll,FileProtocolHandler", address}
+	default:
+		return fmt.Errorf("automatic browser launch is not supported on %s", runtime.GOOS)
+	}
+	return exec.Command(command, args...).Start()
+}
+
 func parseWebOptions(args []string) (webOptions, error) {
 	opts := webOptions{Port: "0"}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--relative-paths":
+			opts.RelativePaths = true
 		case "--repo", "--ref", "--subdir", "--port":
 			if i+1 == len(args) {
 				return opts, fmt.Errorf("%s requires a value", args[i])
@@ -113,7 +148,7 @@ func parseWebOptions(args []string) (webOptions, error) {
 			}
 		default:
 			if strings.HasPrefix(args[i], "-") || opts.ProjectDir != "" {
-				return opts, errors.New("usage: hs web [project-directory] | hs web --repo <github-url> [--ref REF] [--subdir PATH] [--port PORT]")
+				return opts, errors.New("usage: hs web [project-directory] [--relative-paths] | hs web --repo <github-url> [--ref REF] [--subdir PATH] [--port PORT] [--relative-paths]")
 			}
 			opts.ProjectDir = args[i]
 		}
@@ -146,7 +181,7 @@ func resolveWebTarget(opts webOptions) (webProjectTarget, error) {
 		if err != nil {
 			return webProjectTarget{}, err
 		}
-		return webProjectTarget{Project: project, Kind: "local"}, nil
+		return webProjectTarget{Project: project, Kind: "local", RelativePaths: opts.RelativePaths}, nil
 	}
 	repository, err := validateGitHubRepositoryURL(opts.RepoURL)
 	if err != nil {
@@ -164,12 +199,21 @@ func resolveWebTarget(opts webOptions) (webProjectTarget, error) {
 		return webProjectTarget{}, &exitError{code: 3, message: err.Error()}
 	}
 	cleanup := func() { _ = os.RemoveAll(checkout) }
-	arguments := []string{"clone", "--depth", "1"}
+	arguments := []string{"clone", "--depth", "1", "--no-tags", "--no-recurse-submodules", "--progress"}
 	if opts.Ref != "" {
 		arguments = append(arguments, "--branch", opts.Ref)
 	}
 	arguments = append(arguments, repository, checkout)
-	if output, err := exec.Command(git, arguments...).CombinedOutput(); err != nil {
+	cloneContext, cancelClone := context.WithTimeout(context.Background(), repositoryCloneTimeout)
+	defer cancelClone()
+	cloneCommand := exec.CommandContext(cloneContext, git, arguments...)
+	cloneCommand.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_LFS_SKIP_SMUDGE=1")
+	output, cloneErr := cloneCommand.CombinedOutput()
+	if cloneContext.Err() != nil {
+		cleanup()
+		return webProjectTarget{}, &exitError{code: 3, message: fmt.Sprintf("clone repository: timed out after %s; check the repository URL, ref, and network connection", repositoryCloneTimeout)}
+	}
+	if cloneErr != nil {
 		cleanup()
 		return webProjectTarget{}, &exitError{code: 3, message: "clone repository: " + oneLine(string(output), 500)}
 	}
@@ -184,7 +228,7 @@ func resolveWebTarget(opts webOptions) (webProjectTarget, error) {
 		cleanup()
 		return webProjectTarget{}, err
 	}
-	return webProjectTarget{Project: project, Kind: "repository", Repository: repository, RequestedRef: opts.Ref, Commit: strings.TrimSpace(string(commitOut)), Subdir: opts.Subdir, cleanup: cleanup}, nil
+	return webProjectTarget{Project: project, Kind: "repository", Repository: repository, RequestedRef: opts.Ref, Commit: strings.TrimSpace(string(commitOut)), Subdir: opts.Subdir, RelativePaths: opts.RelativePaths, cleanup: cleanup}, nil
 }
 
 func validateGitHubRepositoryURL(raw string) (string, error) {
@@ -285,7 +329,7 @@ func (server *webServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (server *webServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/project":
-		writeWebJSON(w, http.StatusOK, map[string]string{"kind": server.target.Kind, "project": server.target.Project, "repository": server.target.Repository, "requested_ref": server.target.RequestedRef, "commit": server.target.Commit, "subdir": server.target.Subdir})
+		writeWebJSON(w, http.StatusOK, map[string]string{"kind": server.target.Kind, "project": displayPath(server.target.Project, server.target.RelativePaths), "repository": server.target.Repository, "requested_ref": server.target.RequestedRef, "commit": server.target.Commit, "subdir": server.target.Subdir})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/content":
 		server.serveWebContent(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/source":
@@ -312,6 +356,8 @@ func (server *webServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 		server.validateWebCampaignLink(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/jobs":
 		server.startWebJob(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/jobs/") && strings.HasSuffix(r.URL.Path, "/report"):
+		server.serveWebJobReport(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/jobs/"):
 		server.serveWebJob(w, r)
 	default:
@@ -507,6 +553,69 @@ func (server *webServer) serveWebJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeWebJSON(w, http.StatusOK, job)
+}
+
+func (server *webServer) serveWebJobReport(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/jobs/"), "/report")
+	server.mu.RLock()
+	job, ok := server.jobs[id]
+	if ok {
+		copy := *job
+		job = &copy
+	}
+	server.mu.RUnlock()
+	if !ok {
+		writeWebError(w, http.StatusNotFound, "job not found")
+		return
+	}
+	if job.Status != "completed" {
+		writeWebError(w, http.StatusConflict, "job is not completed")
+		return
+	}
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "json"
+	}
+	if format != "json" && format != "sarif" {
+		writeWebError(w, http.StatusBadRequest, "format must be json or sarif")
+		return
+	}
+	filename := "hs-" + job.Kind + ".json"
+	body := job.Result
+	if format == "sarif" {
+		filename = "hs-" + job.Kind + ".sarif.json"
+		body = webSARIFReport(job)
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+func webSARIFReport(job *webJob) map[string]interface{} {
+	results := []map[string]interface{}{}
+	if payload, ok := job.Result.(map[string]interface{}); ok {
+		if findings, ok := payload["findings"].([]Finding); ok {
+			for _, finding := range findings {
+				result := map[string]interface{}{
+					"ruleId":  finding.Code,
+					"level":   string(finding.Severity),
+					"message": map[string]string{"text": finding.Message},
+				}
+				if finding.Source != "" {
+					result["locations"] = []map[string]interface{}{{"physicalLocation": map[string]interface{}{
+						"artifactLocation": map[string]string{"uri": finding.Source},
+						"region":           map[string]int{"startLine": finding.Line},
+					}}}
+				}
+				results = append(results, result)
+			}
+		}
+	}
+	return map[string]interface{}{
+		"version": "2.1.0",
+		"$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+		"runs":    []map[string]interface{}{{"tool": map[string]interface{}{"driver": map[string]interface{}{"name": "hs"}}, "results": results}},
+	}
 }
 
 func writeWebJSON(w http.ResponseWriter, status int, value interface{}) {
