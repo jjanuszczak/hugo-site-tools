@@ -300,7 +300,7 @@ func newWebServer(target webProjectTarget, token string) (*webServer, error) {
 
 func webAssetHandler() (http.Handler, error) {
 	if configured := os.Getenv("HS_WEB_ASSETS"); configured != "" {
-		if hasWebAssetIndex(configured) {
+		if hasWebAssets(configured) {
 			return http.FileServer(http.Dir(configured)), nil
 		}
 		return nil, errors.New("web assets not found; set HS_WEB_ASSETS to the directory containing index.html")
@@ -314,7 +314,7 @@ func webAssetHandler() (http.Handler, error) {
 		candidates = append(candidates, filepath.Join(filepath.Dir(executable), "web_static"))
 	}
 	for _, candidate := range candidates {
-		if hasWebAssetIndex(candidate) {
+		if hasWebAssets(candidate) {
 			return http.FileServer(http.Dir(candidate)), nil
 		}
 	}
@@ -326,9 +326,14 @@ func webAssetHandler() (http.Handler, error) {
 	return http.FileServer(http.FS(assets)), nil
 }
 
-func hasWebAssetIndex(directory string) bool {
-	info, err := os.Stat(filepath.Join(directory, "index.html"))
-	return err == nil && !info.IsDir()
+func hasWebAssets(directory string) bool {
+	for _, relative := range []string{"index.html", "app.js", "vendor/jog/JOG.min.js", "vendor/chartjog/ChartJOG.Controls.js"} {
+		info, err := os.Stat(filepath.Join(directory, filepath.FromSlash(relative)))
+		if err != nil || info.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 func (server *webServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
