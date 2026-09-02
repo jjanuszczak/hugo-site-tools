@@ -3,11 +3,13 @@ package app
 import (
 	"context"
 	"crypto/rand"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -21,6 +23,11 @@ import (
 	"syscall"
 	"time"
 )
+
+// embeddedWebAssets keeps `go install` self-contained for `hs web`.
+//
+//go:embed web_static
+var embeddedWebAssets embed.FS
 
 type webOptions struct {
 	ProjectDir    string
@@ -284,18 +291,22 @@ type webJob struct {
 }
 
 func newWebServer(target webProjectTarget, token string) (*webServer, error) {
-	assets, err := webAssetDirectory()
+	assets, err := webAssetHandler()
 	if err != nil {
 		return nil, err
 	}
-	return &webServer{target: target, token: token, assets: http.FileServer(http.Dir(assets)), jobs: map[string]*webJob{}}, nil
+	return &webServer{target: target, token: token, assets: assets, jobs: map[string]*webJob{}}, nil
 }
 
-func webAssetDirectory() (string, error) {
-	var candidates []string
+func webAssetHandler() (http.Handler, error) {
 	if configured := os.Getenv("HS_WEB_ASSETS"); configured != "" {
-		candidates = append(candidates, configured)
+		if hasWebAssetIndex(configured) {
+			return http.FileServer(http.Dir(configured)), nil
+		}
+		return nil, errors.New("web assets not found; set HS_WEB_ASSETS to the directory containing index.html")
 	}
+
+	var candidates []string
 	if working, err := os.Getwd(); err == nil {
 		candidates = append(candidates, filepath.Join(working, "internal", "app", "web_static"), filepath.Join(working, "web_static"))
 	}
@@ -303,11 +314,21 @@ func webAssetDirectory() (string, error) {
 		candidates = append(candidates, filepath.Join(filepath.Dir(executable), "web_static"))
 	}
 	for _, candidate := range candidates {
-		if info, err := os.Stat(filepath.Join(candidate, "index.html")); err == nil && !info.IsDir() {
-			return candidate, nil
+		if hasWebAssetIndex(candidate) {
+			return http.FileServer(http.Dir(candidate)), nil
 		}
 	}
-	return "", errors.New("web assets not found; set HS_WEB_ASSETS to the directory containing index.html")
+
+	assets, err := fs.Sub(embeddedWebAssets, "web_static")
+	if err != nil {
+		return nil, fmt.Errorf("load embedded web assets: %w", err)
+	}
+	return http.FileServer(http.FS(assets)), nil
+}
+
+func hasWebAssetIndex(directory string) bool {
+	info, err := os.Stat(filepath.Join(directory, "index.html"))
+	return err == nil && !info.IsDir()
 }
 
 func (server *webServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {

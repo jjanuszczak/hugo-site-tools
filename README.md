@@ -10,9 +10,9 @@ The project documentation is maintained as a Docsy Hugo site in [`hs-docs/`](hs-
 go install github.com/jjanuszczak/hugo-site-tools/cmd/hs@latest
 ```
 
-`go install` provides the CLI and TUI. Use a release archive or the local build
-script when you need `hs web`, because its browser assets ship beside the
-executable in `web_static/`.
+`go install` provides the CLI, TUI, and `hs web`; the web assets are embedded in
+the binary. Use a release archive or the local build script if you prefer the
+assets to remain beside the executable in `web_static/`.
 
 For local development:
 

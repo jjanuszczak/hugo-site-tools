@@ -169,3 +169,20 @@ func TestWebJobReportsSupportJSONAndSARIF(t *testing.T) {
 		t.Fatalf("invalid format status = %d", result.Code)
 	}
 }
+
+func TestWebAssetHandlerFallsBackToEmbeddedAssets(t *testing.T) {
+	t.Setenv("HS_WEB_ASSETS", "")
+	t.Chdir(t.TempDir())
+
+	handler, err := webAssetHandler()
+	if err != nil {
+		t.Fatalf("webAssetHandler() error = %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("embedded index status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+}
