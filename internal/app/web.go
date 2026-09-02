@@ -327,7 +327,7 @@ func webAssetHandler() (http.Handler, error) {
 }
 
 func hasWebAssets(directory string) bool {
-	for _, relative := range []string{"index.html", "app.js", "vendor/jog/JOG.min.js", "vendor/chartjog/ChartJOG.Controls.js"} {
+	for _, relative := range []string{"index.html", "app.js", "web_vendor/jog/JOG.min.js", "web_vendor/chartjog/ChartJOG.Controls.js"} {
 		info, err := os.Stat(filepath.Join(directory, filepath.FromSlash(relative)))
 		if err != nil || info.IsDir() {
 			return false

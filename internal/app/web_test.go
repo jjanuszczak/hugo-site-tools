@@ -186,7 +186,7 @@ func TestWebAssetHandlerFallsBackToEmbeddedAssets(t *testing.T) {
 		t.Fatalf("embedded index status = %d, want %d", recorder.Code, http.StatusOK)
 	}
 
-	for _, path := range []string{"/app.js", "/vendor/jog/JOG.min.js", "/vendor/chartjog/ChartJOG.Controls.js"} {
+	for _, path := range []string{"/app.js", "/web_vendor/jog/JOG.min.js", "/web_vendor/chartjog/ChartJOG.Controls.js"} {
 		request = httptest.NewRequest(http.MethodGet, path, nil)
 		recorder = httptest.NewRecorder()
 		handler.ServeHTTP(recorder, request)
