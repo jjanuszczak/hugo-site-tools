@@ -448,6 +448,28 @@ func (m tuiModel) updateCampaign(key string) (tea.Model, tea.Cmd) {
 
 func (m tuiModel) updateCampaignReview(key string) (tea.Model, tea.Cmd) {
 	switch key {
+	case "c":
+		if err := copyTextToClipboard(m.campaignLink.URL); err != nil {
+			m.campaignMessage = "Could not copy link: " + err.Error()
+		} else {
+			m.campaignMessage = "Campaign link copied to clipboard."
+		}
+	case "s":
+		path := filepath.Join(m.project, "campaign-qr.png")
+		if err := writeCampaignQRCode(path, m.campaignLink.URL); err != nil {
+			m.campaignMessage = "Could not save QR code: " + err.Error()
+		} else {
+			m.campaignMessage = "Saved QR code to " + path
+		}
+	case "p":
+		png, err := campaignQRCodePNG(m.campaignLink.URL)
+		if err != nil {
+			m.campaignMessage = "Could not generate QR code: " + err.Error()
+		} else if err := copyPNGToClipboard(png); err != nil {
+			m.campaignMessage = "Could not copy QR code: " + err.Error()
+		} else {
+			m.campaignMessage = "QR code copied to clipboard."
+		}
 	case "enter":
 		m.selectedURL = m.campaignLink.URL
 		m.urlNote = fmt.Sprintf("Expected GA4 channel: %s. Copy the URL, then press Enter or Esc to return.", m.campaignLink.ExpectedChannel)
@@ -1333,7 +1355,11 @@ func (m tuiModel) campaignView() string {
 }
 
 func (m tuiModel) campaignReviewView() string {
-	return fmt.Sprintf("Review campaign link\n\n%s\n\nCampaign: %s\nSource / medium: %s / %s\nExpected GA4 channel: %s\n\nEnter confirm • Esc back\n", m.campaignLink.URL, m.campaignLink.Campaign, m.campaignLink.Source, m.campaignLink.Medium, m.campaignLink.ExpectedChannel)
+	message := ""
+	if m.campaignMessage != "" {
+		message = "\n" + m.campaignMessage + "\n"
+	}
+	return fmt.Sprintf("Review campaign link\n\n%s\n\nCampaign: %s\nSource / medium: %s / %s\nExpected GA4 channel: %s\n%s\n c copy link • s save QR • p copy QR • Enter confirm • Esc back\n", m.campaignLink.URL, m.campaignLink.Campaign, m.campaignLink.Source, m.campaignLink.Medium, m.campaignLink.ExpectedChannel, message)
 }
 
 func (m tuiModel) campaignsView() string {

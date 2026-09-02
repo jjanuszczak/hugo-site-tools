@@ -143,6 +143,10 @@ hs campaign edit sea-fintech-thought-leadership . \
 hs campaign link content/articles/payments.md . \
   --campaign sea-fintech-thought-leadership \
   --source linkedin --medium social --content ceo-post
+hs campaign link content/articles/payments.md . \
+  --campaign sea-fintech-thought-leadership \
+  --source linkedin --medium social --copy-link \
+  --qr-file /tmp/payments-campaign-qr.png
 hs campaign validate "https://example.com/articles/payments/?utm_source=linkedin&utm_medium=social&utm_campaign=sea-fintech-thought-leadership&utm_content=ceo-post" .
 ```
 

@@ -34,7 +34,7 @@ names that fragment GA4 reporting.
 ## Non-goals for v1
 
 - GA4 property access, reporting, campaign-data imports, or conversions.
-- URL shortening, QR code generation, redirect hosting, or click tracking.
+- URL shortening, redirect hosting, or click tracking.
 - Manual tagging of Google Ads destinations. Google Ads auto-tagging is the
   supported path and the tool must warn against a Google Ads manual-UTM flow.
 - Remote TUI support. A remote index cannot prove a source item belongs to the
@@ -222,6 +222,14 @@ clipboard writes, or persistent database. The CLI and TUI call the same
 service. Config mutations go through a narrow repository layer that can be
 tested against temporary Hugo fixtures.
 
+## QR codes and clipboard actions
+
+The campaign link generator creates a QR PNG for the exact validated URL.
+The CLI supports --qr-file PATH, --copy-link, and --copy-qr. The TUI and web
+interfaces provide equivalent explicit actions. QR files are not overwritten
+automatically. Image clipboard support depends on the operating system or
+browser and reports an actionable error when unavailable.
+
 ## Acceptance criteria
 
 1. A configured project can generate a link for a selected local content item
@@ -245,11 +253,12 @@ tested against temporary Hugo fixtures.
    state transitions without an interactive terminal.
 9. README documents the new commands and TUI key binding when the feature is
    implemented.
+10. Users can explicitly copy a generated link, save a QR PNG, and copy a QR
+    image where the operating system or browser supports it.
 
 ## Risks and follow-up decisions
 
 GA4 maintains its Default Channel Group and can revise source lists and rules.
 The product must label its channel indication as an expected classification,
 not a guarantee. A future version may import a current GA4 source catalogue,
-connect a GA4 property for validation, add branded short-link providers, or
-generate QR codes. None of those capabilities belong in this release.
+connect a GA4 property for validation, or add branded short-link providers.

@@ -209,6 +209,15 @@
     generateCampaign.Text = "Generate link";
     generateCampaign.ThemePreset = "primary";
     campaignActions.Add(generateCampaign);
+    var copyCampaignLink = new JOG.Button();
+    copyCampaignLink.Text = "Copy link";
+    campaignActions.Add(copyCampaignLink);
+    var downloadCampaignQR = new JOG.Button();
+    downloadCampaignQR.Text = "Download QR";
+    campaignActions.Add(downloadCampaignQR);
+    var copyCampaignQR = new JOG.Button();
+    copyCampaignQR.Text = "Copy QR";
+    campaignActions.Add(copyCampaignQR);
     var validateCampaign = new JOG.Button();
     validateCampaign.Text = "Validate URL";
     validateCampaign.ThemePreset = "quiet";
@@ -275,6 +284,17 @@
     function campaignResultText(result) {
       return "URL: " + result.url + "\nCampaign: " + result.campaign + "\nMedium: " + result.medium + "\nExpected GA4 channel: " + result.expected_ga4_channel;
     }
+    function campaignURL() {
+      return store.Get("validationURL") || "";
+    }
+    function fetchCampaignQR() {
+      return fetch("/api/campaign-links/qr", { method: "POST", headers: { "Content-Type": "application/json", "X-HS-Session": sessionToken() }, body: JSON.stringify({ url: campaignURL() }) }).then(function(response) {
+        if (!response.ok) {
+          return response.json().then(function(data) { throw new Error(data.error || "Could not generate QR code."); });
+        }
+        return response.blob();
+      });
+    }
     function runJob(kind) {
       store.Set("statusText", "Starting " + kind + "...");
       request("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: kind }) }).then(function(job) {
@@ -316,6 +336,38 @@
         store.Set("campaignResult", campaignResultText(result));
         store.Set("validationURL", result.url);
       }).catch(function(error) { store.Set("campaignResult", "Cannot generate link: " + error.message); });
+    });
+    copyCampaignLink.OnClick(function() {
+      var url = campaignURL();
+      if (!url) { store.Set("campaignResult", "Generate or validate a campaign link first."); return; }
+      if (!global.navigator.clipboard || !global.navigator.clipboard.writeText) {
+        store.Set("campaignResult", "This browser does not support copying links to the clipboard.");
+        return;
+      }
+      global.navigator.clipboard.writeText(url).then(function() {
+        store.Set("campaignResult", "Copied campaign link to clipboard.\n\nURL: " + url);
+      }).catch(function(error) { store.Set("campaignResult", "Cannot copy link: " + error.message); });
+    });
+    downloadCampaignQR.OnClick(function() {
+      if (!campaignURL()) { store.Set("campaignResult", "Generate or validate a campaign link first."); return; }
+      fetchCampaignQR().then(function(blob) {
+        var link = global.document.createElement("a");
+        link.href = global.URL.createObjectURL(blob);
+        link.download = "campaign-qr.png";
+        link.click();
+        global.setTimeout(function() { global.URL.revokeObjectURL(link.href); }, 1000);
+        store.Set("campaignResult", "Downloaded campaign QR code.");
+      }).catch(function(error) { store.Set("campaignResult", "Cannot download QR code: " + error.message); });
+    });
+    copyCampaignQR.OnClick(function() {
+      if (!campaignURL()) { store.Set("campaignResult", "Generate or validate a campaign link first."); return; }
+      if (!global.ClipboardItem || !global.navigator.clipboard || !global.navigator.clipboard.write) {
+        store.Set("campaignResult", "This browser does not support copying images to the clipboard.");
+        return;
+      }
+      fetchCampaignQR().then(function(blob) {
+        return global.navigator.clipboard.write([new global.ClipboardItem({ "image/png": blob })]);
+      }).then(function() { store.Set("campaignResult", "Copied campaign QR code to clipboard."); }).catch(function(error) { store.Set("campaignResult", "Cannot copy QR code: " + error.message); });
     });
     validateCampaign.OnClick(function() {
       request("/api/campaign-links/validate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: store.Get("validationURL") }) }).then(function(result) {

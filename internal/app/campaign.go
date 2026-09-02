@@ -45,6 +45,9 @@ type campaignLinkResult struct {
 	CampaignID      string `json:"campaign_id,omitempty"`
 	ExpectedChannel string `json:"expected_ga4_channel"`
 	PolicyVersion   int    `json:"policy_version"`
+	CopiedLink      bool   `json:"copied_link,omitempty"`
+	QRFile          string `json:"qr_file,omitempty"`
+	CopiedQR        bool   `json:"copied_qr,omitempty"`
 }
 
 var campaignSlug = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -77,7 +80,7 @@ allowed_mediums = ["social", "paid_social"]
 
 func runCampaign(args []string, out io.Writer) error {
 	if len(args) == 0 || isHelp(args[0]) {
-		fmt.Fprintln(out, "Usage: hs campaign init [project-directory]\n       hs campaign list [project-directory] [--format text|json]\n       hs campaign add <key> [project-directory] --label LABEL --description DESCRIPTION [--id ID]\n       hs campaign edit <key> [project-directory] --label LABEL --description DESCRIPTION\n       hs campaign retire <key> [project-directory]\n       hs campaign link <content-file> [project-directory] --campaign KEY --source KEY --medium MEDIUM [--content KEY] [--format text|json]\n       hs campaign validate <url> [project-directory] [--format text|json]")
+		fmt.Fprintln(out, "Usage: hs campaign init [project-directory]\n       hs campaign list [project-directory] [--format text|json]\n       hs campaign add <key> [project-directory] --label LABEL --description DESCRIPTION [--id ID]\n       hs campaign edit <key> [project-directory] --label LABEL --description DESCRIPTION\n       hs campaign retire <key> [project-directory]\n       hs campaign link <content-file> [project-directory] --campaign KEY --source KEY --medium MEDIUM [--content KEY] [--copy-link] [--qr-file PATH] [--copy-qr] [--format text|json]\n       hs campaign validate <url> [project-directory] [--format text|json]")
 		return nil
 	}
 	switch args[0] {
@@ -330,12 +333,12 @@ func tomlValue(stanza, key string) string {
 }
 
 func runCampaignLink(args []string, out io.Writer) error {
-	values, positional, err := campaignValues(args, map[string]bool{"campaign": true, "source": true, "medium": true, "content": true, "format": true})
+	values, positional, err := campaignValues(args, map[string]bool{"campaign": true, "source": true, "medium": true, "content": true, "copy-link": true, "qr-file": true, "copy-qr": true, "format": true})
 	if err != nil {
 		return err
 	}
 	if len(positional) == 0 || len(positional) > 2 || values["campaign"] == "" || values["source"] == "" || values["medium"] == "" {
-		return campaignUsage("usage: hs campaign link <content-file> [project-directory] --campaign KEY --source KEY --medium MEDIUM [--content KEY] [--format text|json]")
+		return campaignUsage("usage: hs campaign link <content-file> [project-directory] --campaign KEY --source KEY --medium MEDIUM [--content KEY] [--copy-link] [--qr-file PATH] [--copy-qr] [--format text|json]")
 	}
 	format := firstNonEmpty(values["format"], "text")
 	if format != "text" && format != "json" {
@@ -355,10 +358,41 @@ func runCampaignLink(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if values["copy-link"] == "true" {
+		if err := copyTextToClipboard(result.URL); err != nil {
+			return err
+		}
+		result.CopiedLink = true
+	}
+	if values["qr-file"] != "" {
+		if err := writeCampaignQRCode(values["qr-file"], result.URL); err != nil {
+			return err
+		}
+		result.QRFile = values["qr-file"]
+	}
+	if values["copy-qr"] == "true" {
+		png, err := campaignQRCodePNG(result.URL)
+		if err != nil {
+			return err
+		}
+		if err := copyPNGToClipboard(png); err != nil {
+			return err
+		}
+		result.CopiedQR = true
+	}
 	if format == "json" {
 		return json.NewEncoder(out).Encode(result)
 	}
 	_, err = fmt.Fprintln(out, result.URL)
+	if err == nil && result.CopiedLink {
+		_, err = fmt.Fprintln(out, "Copied link to clipboard.")
+	}
+	if err == nil && result.QRFile != "" {
+		_, err = fmt.Fprintln(out, "Saved QR code to", result.QRFile)
+	}
+	if err == nil && result.CopiedQR {
+		_, err = fmt.Fprintln(out, "Copied QR code to clipboard.")
+	}
 	return err
 }
 
@@ -416,6 +450,10 @@ func campaignValues(args []string, allowed map[string]bool) (map[string]string, 
 		key := strings.TrimPrefix(args[i], "--")
 		if !allowed[key] {
 			return nil, nil, fmt.Errorf("unknown campaign option %q", args[i])
+		}
+		if key == "copy-link" || key == "copy-qr" {
+			values[key] = "true"
+			continue
 		}
 		if i+1 == len(args) {
 			return nil, nil, fmt.Errorf("%s requires a value", args[i])

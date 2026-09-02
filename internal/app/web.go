@@ -306,6 +306,8 @@ func (server *webServer) serveAPI(w http.ResponseWriter, r *http.Request) {
 		writeWebJSON(w, http.StatusOK, policy)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/campaign-links":
 		server.createWebCampaignLink(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/campaign-links/qr":
+		server.serveWebCampaignQRCode(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/campaign-links/validate":
 		server.validateWebCampaignLink(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/jobs":
@@ -351,6 +353,29 @@ func (server *webServer) validateWebCampaignLink(w http.ResponseWriter, r *http.
 		return
 	}
 	writeWebJSON(w, http.StatusOK, result)
+}
+
+func (server *webServer) serveWebCampaignQRCode(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.URL == "" {
+		writeWebError(w, http.StatusBadRequest, "invalid QR-code request")
+		return
+	}
+	if _, err := validateCampaignURL(server.target.Project, request.URL); err != nil {
+		writeWebError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	png, err := campaignQRCodePNG(request.URL)
+	if err != nil {
+		writeWebError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Disposition", `attachment; filename="campaign-qr.png"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(png)
 }
 
 type webContentItem struct {
