@@ -327,13 +327,30 @@ func webAssetHandler() (http.Handler, error) {
 }
 
 func hasWebAssets(directory string) bool {
-	for _, relative := range []string{"index.html", "app.js", "web_vendor/jog/JOG.min.js", "web_vendor/chartjog/ChartJOG.Controls.js"} {
+	for _, relative := range webAssetFiles {
 		info, err := os.Stat(filepath.Join(directory, filepath.FromSlash(relative)))
 		if err != nil || info.IsDir() {
 			return false
 		}
 	}
 	return true
+}
+
+// webAssetFiles lists every file an "hs web" asset directory must contain.
+// The license and attribution files are included so a release archive or a
+// copied asset tree can never silently drop the vendored-library notices that
+// ship beside JOG and ChartJOG.
+var webAssetFiles = []string{
+	"index.html",
+	"app.js",
+	"web_vendor/jog/JOG.min.js",
+	"web_vendor/jog/LICENSE",
+	"web_vendor/jog/NOTICE",
+	"web_vendor/chartjog/ChartJOG.Controls.js",
+	"web_vendor/chartjog/LICENSE",
+	"web_vendor/chartjog/NOTICE",
+	"web_vendor/chartjog/licenses/chartjs-LICENSE.md",
+	"web_vendor/chartjog/licenses/kurkle-color-LICENSE.md",
 }
 
 func (server *webServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {

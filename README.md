@@ -228,6 +228,13 @@ go test ./...
 go vet ./...
 ```
 
+The repository also runs `golangci-lint` in CI with the rules in `.golangci.yml`. To reproduce the CI lint locally, install the pinned version and run it from the repository root:
+
+```sh
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+golangci-lint run ./...
+```
+
 `./scripts/build.sh` writes the native executable to `bin/hs`. Set `OUTPUT` to choose another path, including a cross-compiled target:
 
 ```sh
@@ -245,7 +252,7 @@ git tag -a v1.2.3 -m "v1.2.3"
 git push origin v1.2.3
 ```
 
-The release workflow runs tests and `go vet`, builds the archives with `scripts/build.sh`, publishes SHA-256 checksums, and generates the GitHub release notes. See [the release runbook](docs/releasing.md) for the complete terminal checklist and recovery procedure.
+The release workflow runs tests and `go vet`, builds the archives with `scripts/build.sh` (which also copies the vendored web assets and their license files), publishes SHA-256 checksums, and generates the GitHub release notes. See [the release runbook](docs/releasing.md) for the complete terminal checklist and recovery procedure.
 
 See [the product roadmap and doctor specification](docs/roadmap.md) for planned work and the intended package structure.
 

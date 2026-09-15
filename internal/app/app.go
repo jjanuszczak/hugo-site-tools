@@ -907,12 +907,16 @@ func runContentNew(args []string, out io.Writer) error {
 			if i+1 == len(args) {
 				return fmt.Errorf("%s requires a value", args[i])
 			}
+			// Capture the flag name before advancing so the switch below
+			// reads its value from the correct argument.
+			flag := args[i]
 			i++
-			if args[i-1] == "--section" {
+			switch flag {
+			case "--section":
 				section = args[i]
-			} else if args[i-1] == "--tag" {
+			case "--tag":
 				tags = append(tags, args[i])
-			} else {
+			default:
 				date = args[i]
 			}
 		case "--draft":
@@ -1366,7 +1370,8 @@ func parseDoctorOptions(args []string) (DoctorOptions, error) {
 				return opts, fmt.Errorf("%s requires a value", arg)
 			}
 			i++
-			if arg == "--only" {
+			switch arg {
+			case "--only":
 				opts.OnlySet = true
 				opts.Only = strings.Split(args[i], ",")
 				for _, check := range opts.Only {
@@ -1374,9 +1379,9 @@ func parseDoctorOptions(args []string) (DoctorOptions, error) {
 						return opts, fmt.Errorf("unknown doctor check %q", check)
 					}
 				}
-			} else if arg == "--format" {
+			case "--format":
 				opts.Format = args[i]
-			} else {
+			default:
 				opts.Source = filepath.ToSlash(args[i])
 			}
 		default:
@@ -1680,15 +1685,6 @@ func comparePublishedURLs(localURLs, remoteURLs []string) []Finding {
 		}
 	}
 	return findings
-}
-
-func containsCheck(checks []string, wanted string) bool {
-	for _, check := range checks {
-		if check == wanted {
-			return true
-		}
-	}
-	return false
 }
 
 func remoteHTMLMetadata(root *html.Node) (title, description, canonical string) {

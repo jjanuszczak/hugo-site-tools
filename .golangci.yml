@@ -1,0 +1,23 @@
+# golangci-lint configuration for hs.
+#
+# The CI workflow (.github/workflows/test.yml) runs this file with the pinned
+# linter version. To reproduce the same run locally:
+#
+#     go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+#     golangci-lint run ./...
+#
+# This starts from the linter's curated "standard" set (errcheck, govet,
+# ineffassign, staticcheck, unused) so the first run is green and green stays
+# meaningful. Add new linters one at a time, fixing findings in the same change
+# rather than growing a suppression list.
+version: "2"
+
+linters:
+  default: standard
+  exclusions:
+    presets:
+      # The standard-error-handling preset ignores unchecked errors on
+      # conventional cleanup paths such as deferred file, response-body, and
+      # listener Close calls and best-effort os.RemoveAll cleanup. Keeping this
+      # preset avoids noise that hides genuinely missing error checks.
+      - std-error-handling

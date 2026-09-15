@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -193,5 +194,57 @@ func TestWebAssetHandlerFallsBackToEmbeddedAssets(t *testing.T) {
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("embedded asset %s status = %d, want %d", path, recorder.Code, http.StatusOK)
 		}
+	}
+}
+
+// TestEmbeddedWebAssetsIncludeVendorLicenses guards the legal-hygiene
+// requirement tracked in issue #12: every vendored JavaScript bundle must ship
+// its license and attribution text both in the embedded binary (so
+// `go install` carries them) and on disk (so scripts/build.sh copies them into
+// release archives).
+func TestEmbeddedWebAssetsIncludeVendorLicenses(t *testing.T) {
+	// The embedded copy is what a `go install` binary serves. fs.Sub strips the
+	// top-level "web_static" directory, so paths are asset-relative.
+	assets, err := fs.Sub(embeddedWebAssets, "web_static")
+	if err != nil {
+		t.Fatalf("fs.Sub() error = %v", err)
+	}
+
+	required := []string{
+		"web_vendor/jog/LICENSE",
+		"web_vendor/jog/NOTICE",
+		"web_vendor/chartjog/LICENSE",
+		"web_vendor/chartjog/NOTICE",
+		"web_vendor/chartjog/licenses/chartjs-LICENSE.md",
+		"web_vendor/chartjog/licenses/kurkle-color-LICENSE.md",
+	}
+	for _, path := range required {
+		data, err := fs.ReadFile(assets, path)
+		if err != nil {
+			t.Errorf("embedded asset %s is missing: %v", path, err)
+			continue
+		}
+		if !bytes.Contains(data, []byte("MIT")) {
+			t.Errorf("embedded asset %s does not contain an MIT license notice", path)
+		}
+	}
+
+	// The same files must exist on disk in the source tree, because
+	// scripts/build.sh copies web_static into the release staging directory.
+	for _, path := range required {
+		if _, err := os.Stat(filepath.Join("web_static", filepath.FromSlash(path))); err != nil {
+			t.Errorf("on-disk asset %s is missing: %v", path, err)
+		}
+	}
+
+	// hasWebAssets gates the HS_WEB_ASSETS override and the executable-relative
+	// asset directory. A directory missing the license files must be rejected so
+	// an incomplete bundle never silently ships.
+	incomplete := t.TempDir()
+	if err := os.WriteFile(filepath.Join(incomplete, "index.html"), []byte("<html></html>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if hasWebAssets(incomplete) {
+		t.Fatal("hasWebAssets accepted a directory without vendor licenses")
 	}
 }
