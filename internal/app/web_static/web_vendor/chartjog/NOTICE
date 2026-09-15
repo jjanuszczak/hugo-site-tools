@@ -1,0 +1,30 @@
+# Attribution for the vendored ChartJOG bundle
+
+`ChartJOG.Controls.js` in this directory is an unmodified, pre-built bundle. It
+contains JOG's ChartJOG control together with two bundled MIT-licensed
+libraries. All three are reproduced under the MIT license.
+
+## ChartJOG
+
+- Project: JOG (JavaScript Object GUI), package `ChartJOG`
+- Source: https://github.com/jjanuszczak/jog
+- Source file: `v2/packages-src/ChartJOG.Controls.source.js`
+- Source commit: 118d2be72f2368cff40bacdc1ca39b3f1dd6670a
+- Bundle version: 1.0.0 (reported by the bundled control metadata)
+- License: MIT (see `LICENSE` in this directory)
+
+## Bundled third-party libraries
+
+The bundle inlines these libraries. Their license texts are reproduced beside
+this file so they travel with the release archives.
+
+| Library | Version | Copyright | License | License text |
+| --- | --- | --- | --- | --- |
+| Chart.js | 4.5.1 | (c) 2014-2024 Chart.js Contributors | MIT | `licenses/chartjs-LICENSE.md` |
+| @kurkle/color | 0.3.4 | (c) 2018-2024 Jukka Kurkela | MIT | `licenses/kurkle-color-LICENSE.md` |
+
+The bundle itself also ends with a `Bundled license information` comment that
+names both libraries; keep that comment when the bundle is regenerated.
+
+When updating this bundle, copy the license files from the same upstream
+releases and refresh the versions and commit above.

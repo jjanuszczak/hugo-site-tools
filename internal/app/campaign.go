@@ -636,13 +636,16 @@ func campaignBaseURL(project string) (*url.URL, error) {
 	}
 	raw := doctorBaseURL(files)
 	if raw == "" {
+		//nolint:staticcheck // "Hugo" is a proper noun; rewording would change user-facing errors.
 		return nil, errors.New("Hugo baseURL is required to create campaign links")
 	}
 	base, err := url.Parse(raw)
 	if err != nil || base.Scheme == "" || base.Host == "" {
+		//nolint:staticcheck // "Hugo" is a proper noun; rewording would change user-facing errors.
 		return nil, errors.New("Hugo baseURL must be an absolute HTTP URL")
 	}
 	if base.Scheme != "http" && base.Scheme != "https" {
+		//nolint:staticcheck // "Hugo" is a proper noun; rewording would change user-facing errors.
 		return nil, errors.New("Hugo baseURL must use HTTP or HTTPS")
 	}
 	if !strings.HasSuffix(base.Path, "/") {

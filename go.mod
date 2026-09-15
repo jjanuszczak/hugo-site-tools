@@ -2,6 +2,9 @@ module github.com/jjanuszczak/hugo-site-tools
 
 go 1.26
 
+// Pin the patch toolchain so local builds match the 1.26.x line used in CI.
+toolchain go1.26.5
+
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0

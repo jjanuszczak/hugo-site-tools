@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1141,8 +1142,11 @@ func resultSources(result string) []tuiResultSource {
 	seen := map[string]bool{}
 	var sources []tuiResultSource
 	for _, match := range tuiFindingSource.FindAllStringSubmatch(result, -1) {
-		line := 0
-		fmt.Sscanf(match[2], "%d", &line)
+		// tuiFindingSource captures only digits in group 2, so a parse
+		// failure can only mean the line number overflowed. Falling back
+		// to 0 keeps the preview on the start of the file instead of
+		// dropping the finding.
+		line, _ := strconv.Atoi(match[2])
 		key := match[1] + ":" + match[2]
 		if !seen[key] {
 			seen[key] = true
@@ -1161,8 +1165,9 @@ func (m *tuiModel) openResultSource() {
 	if len(match) != 3 {
 		return
 	}
-	line := 0
-	fmt.Sscanf(match[2], "%d", &line)
+	// See resultSources: the regex already guarantees a digit-only capture,
+	// so an error here only means overflow and line 0 is the safe fallback.
+	line, _ := strconv.Atoi(match[2])
 	source := tuiResultSource{path: filepath.ToSlash(match[1]), line: line}
 	data, err := os.ReadFile(filepath.Join(m.project, filepath.FromSlash(source.path)))
 	if err != nil {
@@ -1391,7 +1396,7 @@ func (m tuiModel) contentView() string {
 		}
 		fmt.Fprintf(&view, "%s%s  %-9s %-12s %5d words  %s\n", marker, date, state, item.Section, item.Words, item.Title)
 	}
-	view.WriteString(fmt.Sprintf("\n%d item(s)\n", len(items)))
+	fmt.Fprintf(&view, "\n%d item(s)\n", len(items))
 	return view.String()
 }
 

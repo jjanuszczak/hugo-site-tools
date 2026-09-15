@@ -1,0 +1,14 @@
+# Attribution for the vendored JOG runtime
+
+`JOG.min.js` in this directory is an unmodified copy of the JOG V2 runtime.
+
+- Project: JOG (JavaScript Object GUI)
+- Source: https://github.com/jjanuszczak/jog
+- Version: 2.0.0 (reported by `JOG.min.js`)
+- Source commit: 118d2be72f2368cff40bacdc1ca39b3f1dd6670a
+- License: MIT (see `LICENSE` in this directory)
+
+Vendoring keeps `hs web` self-contained instead of loading the runtime from a
+CDN. See `docs/web-interface-plan.md` for the decision record. When updating
+this file, copy the matching `LICENSE` from the same upstream commit and refresh
+the version and commit above.
