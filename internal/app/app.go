@@ -1235,15 +1235,16 @@ func statsPageSource(draft bool) string {
 	return fmt.Sprintf("---\ntitle: \"The CEO Playbook in Numbers\"\ndate: %s\nsummary: \"A living record of the ideas, operating principles, and strategic work shaping how I think about technology, innovation, and executive leadership.\"\ndescription: \"A living record of the ideas, operating principles, and strategic work shaping how I think about technology, innovation, and executive leadership.\"\ntags: []\ndraft: %t\nhsSuppressStats: true\nshowTableOfContents: true\nshowDate: false\nshowReadingTime: false\nshowWordCount: false\nsharingLinks: false\n---\n\n{{< site-stats section=\"overview\" >}}\n\n## Content by category\n\n{{< site-stats section=\"category\" >}}\n\n## Publishing by section\n\n{{< site-stats section=\"section\" >}}\n\n## Publishing over time\n\n{{< site-stats section=\"time\" >}}\n\n## Most discussed topics\n\n{{< site-stats section=\"topics\" >}}\n\n## Recent publishing\n\n{{< site-stats section=\"recent\" >}}\n", time.Now().UTC().Format(time.RFC3339), draft)
 }
 
+//nolint:unused // retained as a compatibility reference for older generated-page workflows.
 func renderStatsPage(stats contentStats, draft bool) string {
 	var page strings.Builder
 	page.WriteString("---\n")
 	page.WriteString("title: \"Site statistics\"\n")
-	page.WriteString(fmt.Sprintf("date: %s\n", stats.GeneratedAt.Format(time.RFC3339)))
+	_, _ = fmt.Fprintf(&page, "date: %s\n", stats.GeneratedAt.Format(time.RFC3339))
 	page.WriteString("summary: \"A live view of the CEO Playbook's publishing output, subject mix, and cadence.\"\n")
 	page.WriteString("description: \"A live view of the CEO Playbook's publishing output, subject mix, and cadence.\"\n")
 	page.WriteString("tags: []\n")
-	page.WriteString(fmt.Sprintf("draft: %t\n", draft))
+	_, _ = fmt.Fprintf(&page, "draft: %t\n", draft)
 	page.WriteString("hsSuppressStats: true\n")
 	page.WriteString("showDate: false\nshowReadingTime: false\nshowWordCount: false\nsharingLinks: false\n")
 	page.WriteString("---\n\n")
@@ -1252,7 +1253,7 @@ func renderStatsPage(stats contentStats, draft bool) string {
 	page.WriteString("{{< /lead >}}\n\n")
 
 	page.WriteString("{{< stats columns=\"4\" >}}\n")
-	page.WriteString(fmt.Sprintf("  {{< stat value=\"%s\" label=\"Published pages\" />}}\n", formatInteger(stats.Posts)))
+	_, _ = fmt.Fprintf(&page, "  {{< stat value=\"%s\" label=\"Published pages\" />}}\n", formatInteger(stats.Posts))
 	page.WriteString(fmt.Sprintf("  {{< stat value=\"%s\" label=\"Words published\" />}}\n", formatInteger(stats.TotalWords)))
 	page.WriteString(fmt.Sprintf("  {{< stat value=\"%s\" label=\"Average words per page\" />}}\n", formatInteger(stats.AverageWords)))
 	page.WriteString(fmt.Sprintf("  {{< stat value=\"%s\" label=\"Publishing span\" />}}\n", publishingSpan(stats)))
@@ -1320,17 +1321,20 @@ func renderStatsPage(stats contentStats, draft bool) string {
 	return page.String()
 }
 
+//nolint:unused // retained with the legacy page renderer above.
 type statsCountRow struct {
 	Name  string
 	Count int
 }
 
+//nolint:unused // retained with the legacy page renderer above.
 type statsSectionRow struct {
 	Name  string
 	Posts int
 	Words int
 }
 
+//nolint:unused // retained with the legacy page renderer above.
 func sortedCountRows(values map[string]int) []statsCountRow {
 	rows := make([]statsCountRow, 0, len(values))
 	for name, count := range values {
@@ -1345,6 +1349,7 @@ func sortedCountRows(values map[string]int) []statsCountRow {
 	return rows
 }
 
+//nolint:unused // retained with the legacy page renderer above.
 func sortedSectionRows(values map[string]contentStatBucket) []statsSectionRow {
 	rows := make([]statsSectionRow, 0, len(values))
 	for name, bucket := range values {
@@ -1359,6 +1364,7 @@ func sortedSectionRows(values map[string]contentStatBucket) []statsSectionRow {
 	return rows
 }
 
+//nolint:unused // retained with the legacy page renderer above.
 func sortedYearRows(values map[string]contentStatBucket) []statsCountRow {
 	rows := make([]statsCountRow, 0, len(values))
 	for year, bucket := range values {
@@ -1368,6 +1374,7 @@ func sortedYearRows(values map[string]contentStatBucket) []statsCountRow {
 	return rows
 }
 
+//nolint:unused // retained with the legacy page renderer above.
 func firstCountRows(rows []statsCountRow, count int) []statsCountRow {
 	if len(rows) <= count {
 		return rows
@@ -1375,6 +1382,7 @@ func firstCountRows(rows []statsCountRow, count int) []statsCountRow {
 	return rows[:count]
 }
 
+//nolint:unused // retained with the legacy page renderer above.
 func chartConfig(chartType string, rows []statsCountRow, label string) string {
 	labels := make([]string, 0, len(rows))
 	values := make([]int, 0, len(rows))
@@ -1394,6 +1402,7 @@ func chartConfig(chartType string, rows []statsCountRow, label string) string {
 	return fmt.Sprintf("type: '%s',\ndata: {\n  labels: %s,\n  datasets: [{\n    label: '%s',\n    data: %s\n  }]\n},\noptions: {\n  responsive: true,\n  plugins: {\n    legend: { position: 'bottom' }\n  }\n}\n", chartType, encodedLabels, label, encodedValues)
 }
 
+//nolint:unused // retained with the legacy page renderer above.
 func publishingSpan(stats contentStats) string {
 	if stats.FirstPublished == "" || stats.LatestPublished == "" {
 		return "0 years"
@@ -1406,6 +1415,7 @@ func publishingSpan(stats contentStats) string {
 	return fmt.Sprintf("%d years", latest.Year()-first.Year()+1)
 }
 
+//nolint:unused // retained with the legacy page renderer above.
 func percentage(value, total int) float64 {
 	if total == 0 {
 		return 0
@@ -1413,6 +1423,7 @@ func percentage(value, total int) float64 {
 	return float64(value) * 100 / float64(total)
 }
 
+//nolint:unused // retained with the legacy page renderer above.
 func countRows(values map[string]int) int {
 	total := 0
 	for _, value := range values {
@@ -1421,6 +1432,7 @@ func countRows(values map[string]int) int {
 	return total
 }
 
+//nolint:unused // retained with the legacy page renderer above.
 func formatInteger(value int) string {
 	text := strconv.Itoa(value)
 	start := 0
@@ -1433,6 +1445,7 @@ func formatInteger(value int) string {
 	return text
 }
 
+//nolint:unused // retained with the legacy page renderer above.
 func markdownCell(value string) string {
 	return strings.NewReplacer("|", "\\|", "\n", " ", "\r", " ").Replace(value)
 }
