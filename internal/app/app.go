@@ -1254,9 +1254,9 @@ func renderStatsPage(stats contentStats, draft bool) string {
 
 	page.WriteString("{{< stats columns=\"4\" >}}\n")
 	_, _ = fmt.Fprintf(&page, "  {{< stat value=\"%s\" label=\"Published pages\" />}}\n", formatInteger(stats.Posts))
-	page.WriteString(fmt.Sprintf("  {{< stat value=\"%s\" label=\"Words published\" />}}\n", formatInteger(stats.TotalWords)))
-	page.WriteString(fmt.Sprintf("  {{< stat value=\"%s\" label=\"Average words per page\" />}}\n", formatInteger(stats.AverageWords)))
-	page.WriteString(fmt.Sprintf("  {{< stat value=\"%s\" label=\"Publishing span\" />}}\n", publishingSpan(stats)))
+	_, _ = fmt.Fprintf(&page, "  {{< stat value=\"%s\" label=\"Words published\" />}}\n", formatInteger(stats.TotalWords))
+	_, _ = fmt.Fprintf(&page, "  {{< stat value=\"%s\" label=\"Average words per page\" />}}\n", formatInteger(stats.AverageWords))
+	_, _ = fmt.Fprintf(&page, "  {{< stat value=\"%s\" label=\"Publishing span\" />}}\n", publishingSpan(stats))
 	page.WriteString("{{< /stats >}}\n\n")
 
 	page.WriteString("## Content by category\n\n")
