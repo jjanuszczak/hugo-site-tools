@@ -116,6 +116,12 @@ type tuiResultLine struct {
 	firstOfLine bool
 }
 
+type tuiContentLine struct {
+	text        string
+	itemIndex   int
+	firstOfItem bool
+}
+
 var tuiFindingSource = regexp.MustCompile(`(?m)^(?:WARNING|ERROR|INFO)\s+HS-[^\s]+\s+([^:\s]+\.(?:md|markdown|html|gohtml)):(\d+):`)
 
 type tuiRemoteContentResult struct {
@@ -311,6 +317,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.height = msg.Height
 		m.width = msg.Width
+		if m.screen == tuiPreview {
+			m.previewOffset = min(m.previewOffset, max(0, len(m.previewDisplayLines())-m.previewHeight()))
+		}
 		return m, nil
 	case tuiCommandResult:
 		m.running = false
@@ -725,7 +734,7 @@ func (m *tuiModel) cycleCampaignValue(step int) {
 }
 
 func (m tuiModel) updatePreview(key string) (tea.Model, tea.Cmd) {
-	lines := strings.Split(m.previewText, "\n")
+	lines := m.previewDisplayLines()
 	maxOffset := max(0, len(lines)-m.previewHeight())
 	switch key {
 	case "up", "k":
@@ -1378,14 +1387,32 @@ func (m tuiModel) contentView() string {
 		view.WriteString("No matching content.\n")
 		return view.String()
 	}
-	start := max(0, m.contentCursor-(m.contentHeight()/2))
-	end := min(len(items), start+m.contentHeight())
-	for i := start; i < end; i++ {
-		item := items[i]
+	display := m.contentDisplayLines(items)
+	selectedLine := 0
+	for index, line := range display {
+		if line.itemIndex == m.contentCursor && line.firstOfItem {
+			selectedLine = index
+			break
+		}
+	}
+	start := max(0, selectedLine-(m.contentHeight()/2))
+	end := min(len(display), start+m.contentHeight())
+	for index := start; index < end; index++ {
+		line := display[index]
 		marker := "  "
-		if i == m.contentCursor {
+		if line.itemIndex == m.contentCursor && line.firstOfItem {
 			marker = "> "
 		}
+		view.WriteString(marker + line.text + "\n")
+	}
+	fmt.Fprintf(&view, "\n%d item(s)\n", len(items))
+	return view.String()
+}
+
+func (m tuiModel) contentDisplayLines(items []contentItem) []tuiContentLine {
+	width := max(20, m.width-2)
+	var display []tuiContentLine
+	for itemIndex, item := range items {
 		date := "          "
 		if !item.Date.IsZero() {
 			date = item.Date.Format("2006-01-02")
@@ -1394,22 +1421,33 @@ func (m tuiModel) contentView() string {
 		if item.Draft {
 			state = "draft"
 		}
-		fmt.Fprintf(&view, "%s%s  %-9s %-12s %5d words  %s\n", marker, date, state, item.Section, item.Words, item.Title)
+		row := fmt.Sprintf("%s  %-9s %-12s %5d words  %s", date, state, item.Section, item.Words, item.Title)
+		for lineIndex, line := range wrapTUIResultLine(row, width) {
+			display = append(display, tuiContentLine{text: line, itemIndex: itemIndex, firstOfItem: lineIndex == 0})
+		}
 	}
-	fmt.Fprintf(&view, "\n%d item(s)\n", len(items))
-	return view.String()
+	return display
 }
 
 func (m tuiModel) previewView() string {
 	var view strings.Builder
 	fmt.Fprintf(&view, "%s\n\n", m.previewSource)
-	lines := strings.Split(m.previewText, "\n")
+	lines := m.previewDisplayLines()
 	end := min(len(lines), m.previewOffset+m.previewHeight())
 	for _, line := range lines[m.previewOffset:end] {
 		view.WriteString(line + "\n")
 	}
 	view.WriteString("\n↑/↓ scroll • PgUp/PgDn or Space page • Home/End jump • Enter or Esc back\n")
 	return view.String()
+}
+
+func (m tuiModel) previewDisplayLines() []string {
+	width := max(20, m.width-2)
+	var display []string
+	for _, line := range strings.Split(m.previewText, "\n") {
+		display = append(display, wrapTUIResultLine(line, width)...)
+	}
+	return display
 }
 
 func (m tuiModel) urlView() string {
