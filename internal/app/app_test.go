@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestSearchRanksTitleAndRequiresAllTerms(t *testing.T) {
@@ -428,6 +430,48 @@ func TestTUIWrapsLongDiagnosticLinesWithoutLosingText(t *testing.T) {
 	}
 	if !strings.Contains(view, "> WARNING HS-BUILD-002") {
 		t.Fatalf("wrapped result lost cursor:\n%s", view)
+	}
+}
+
+func TestTUIWrapsContentRowsToTerminalWidth(t *testing.T) {
+	m := newTUIModel(t.TempDir())
+	m.screen = tuiContent
+	m.width = 48
+	m.items = []contentItem{{Title: "A title that is deliberately long enough to wrap in the content browser", Section: "articles", Words: 12}}
+
+	view := m.contentView()
+	compact := strings.Join(strings.Fields(view), " ")
+	if !strings.Contains(compact, m.items[0].Title) {
+		t.Fatalf("wrapped content lost title:\n%s", view)
+	}
+	for _, line := range m.contentDisplayLines(m.items) {
+		if len([]rune(line.text))+2 > m.width {
+			t.Fatalf("content line exceeds terminal width: %d > %d:\n%s", len([]rune(line.text))+2, m.width, view)
+		}
+	}
+}
+
+func TestTUIReflowsPreviewWhenTerminalWidthChanges(t *testing.T) {
+	m := newTUIModel(t.TempDir())
+	m.screen = tuiPreview
+	m.width = 42
+	m.previewText = "A long content line that must reflow when the terminal width changes."
+	m.previewOffset = 99
+	wideLines := len(m.previewDisplayLines())
+	if wideLines < 2 {
+		t.Fatalf("preview did not wrap at narrow width: %d lines", wideLines)
+	}
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 24})
+	resized := updated.(tuiModel)
+	if resized.previewOffset > max(0, len(resized.previewDisplayLines())-resized.previewHeight()) {
+		t.Fatalf("preview offset was not clamped after resize: %d", resized.previewOffset)
+	}
+	if got := len(resized.previewDisplayLines()); got >= wideLines {
+		t.Fatalf("preview did not reflow after resize: narrow=%d wide=%d", wideLines, got)
+	}
+	if !strings.Contains(strings.Join(resized.previewDisplayLines(), ""), "terminal width changes") {
+		t.Fatalf("preview lost text after resize: %#v", resized.previewDisplayLines())
 	}
 }
 
