@@ -684,23 +684,25 @@ type postSummary struct {
 }
 
 type contentItem struct {
-	Title        string    `json:"title"`
-	Date         time.Time `json:"date,omitempty"`
-	Section      string    `json:"section"`
-	Categories   []string  `json:"categories,omitempty"`
-	Tags         []string  `json:"tags,omitempty"`
-	Draft        bool      `json:"draft"`
-	Words        int       `json:"word_count"`
-	URL          string    `json:"url"`
-	GeneratedURL string    `json:"-"`
-	Source       string    `json:"source"`
-	Body         string    `json:"-"`
-	StatsPage    bool      `json:"-"`
+	Title         string    `json:"title"`
+	Date          time.Time `json:"date,omitempty"`
+	Section       string    `json:"section"`
+	Categories    []string  `json:"categories,omitempty"`
+	Tags          []string  `json:"tags,omitempty"`
+	Draft         bool      `json:"draft"`
+	Words         int       `json:"word_count"`
+	URL           string    `json:"url"`
+	SiteURL       string    `json:"site_url"`
+	GeneratedURL  string    `json:"-"`
+	Source        string    `json:"source"`
+	Body          string    `json:"-"`
+	SuppressStats bool      `json:"-"`
+	ListPage      bool      `json:"-"`
 }
 
 func runContent(args []string, out io.Writer) error {
 	if len(args) == 0 || isHelp(args[0]) {
-		fmt.Fprintln(out, "Usage: hs content list [site-directory] [--draft true|false] [--format text|json]\n       hs content search <terms> [site-directory] [--section NAME] [--tag TAG] [--draft true|false] [--from DATE] [--to DATE]\n       hs content new <title> [site-directory] [--section NAME] [--tag TAG] [--draft] [--date DATE]\n       hs content stats [site-directory] [--write] [--draft] [--output PATH]")
+		fmt.Fprintln(out, "Usage: hs content list [site-directory] [--draft true|false] [--format text|json]\n       hs content search <terms> [site-directory] [--section NAME] [--tag TAG] [--draft true|false] [--from DATE] [--to DATE]\n       hs content new <title> [site-directory] [--section NAME] [--tag TAG] [--draft] [--date DATE]\n       hs content stats [site-directory] [--write|--data-only] [--draft] [--output PATH]")
 		return nil
 	}
 	switch args[0] {
@@ -856,13 +858,15 @@ func runContentSearch(args []string, out io.Writer) error {
 }
 
 func runContentStats(args []string, out io.Writer) error {
-	write, draft := false, false
+	write, dataOnly, draft := false, false, false
 	output := "site-stats"
 	var positional []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--write":
 			write = true
+		case "--data-only":
+			write, dataOnly = true, true
 		case "--draft":
 			draft = true
 		case "--output":
@@ -880,14 +884,29 @@ func runContentStats(args []string, out io.Writer) error {
 		return err
 	}
 	if len(extra) != 0 || strings.HasPrefix(output, "/") || strings.Contains(output, "..") {
-		return errors.New("usage: hs content stats [site-directory] [--write] [--draft] [--output PATH]")
+		return errors.New("usage: hs content stats [site-directory] [--write|--data-only] [--draft] [--output PATH]")
 	}
 	items, err := collectContent(project)
 	if err != nil {
 		return err
 	}
+	if !draft {
+		published := items[:0]
+		for _, item := range items {
+			if !item.Draft {
+				published = append(published, item)
+			}
+		}
+		items = published
+	}
 	stats := makeContentStats(items)
 	if !write {
+		return writeContentStatsSummary(out, stats)
+	}
+	if dataOnly {
+		if err := writeContentStatsData(project, stats); err != nil {
+			return err
+		}
 		return writeContentStatsSummary(out, stats)
 	}
 	if err := writeContentStats(project, output, draft, stats); err != nil {
@@ -1015,7 +1034,8 @@ func collectContent(siteDir string) ([]contentItem, error) {
 			}
 			meta, body := parseFrontMatter(string(data))
 			relative, _ := filepath.Rel(siteDir, file)
-			items = append(items, contentItem{Title: meta.string("title"), Date: parseDate(meta.string("date", "publishdate", "publishDate")), Section: contentSection(virtual), Categories: meta.strings("categories", "category"), Tags: meta.strings("tags", "tag"), Draft: strings.EqualFold(meta.string("draft"), "true"), Words: wordCount(body), URL: contentURL(virtual, meta), GeneratedURL: generatedContentURL(virtual), Source: filepath.ToSlash(relative), Body: body, StatsPage: strings.EqualFold(meta.string("hs_stats"), "true")})
+			generatedURL := generatedContentURL(virtual)
+			items = append(items, contentItem{Title: meta.string("title"), Date: parseDate(meta.string("date", "publishdate", "publishDate")), Section: contentSection(virtual), Categories: meta.strings("categories", "category"), Tags: meta.strings("tags", "tag"), Draft: strings.EqualFold(meta.string("draft"), "true"), Words: wordCount(body), URL: contentURL(virtual, meta), SiteURL: generatedURL, GeneratedURL: generatedURL, Source: filepath.ToSlash(relative), Body: body, SuppressStats: strings.EqualFold(meta.string("hsSuppressStats"), "true"), ListPage: strings.EqualFold(strings.TrimSuffix(entry.Name(), ext), "_index")})
 			return nil
 		})
 		if err != nil {
@@ -1098,6 +1118,7 @@ type contentStats struct {
 	AverageInterval string                       `json:"average_time_between_posts,omitempty"`
 	FirstPublished  string                       `json:"first_published,omitempty"`
 	LatestPublished string                       `json:"latest_published,omitempty"`
+	Categories      map[string]int               `json:"categories"`
 	Sections        map[string]contentStatBucket `json:"sections"`
 	Tags            map[string]int               `json:"tags"`
 	Years           map[string]contentStatBucket `json:"years"`
@@ -1109,11 +1130,11 @@ type contentStatBucket struct {
 }
 
 func makeContentStats(items []contentItem) contentStats {
-	stats := contentStats{GeneratedAt: time.Now().UTC(), Sections: map[string]contentStatBucket{}, Tags: map[string]int{}, Years: map[string]contentStatBucket{}}
+	stats := contentStats{GeneratedAt: time.Now().UTC(), Categories: map[string]int{}, Sections: map[string]contentStatBucket{}, Tags: map[string]int{}, Years: map[string]contentStatBucket{}}
 	posts := make([]post, 0, len(items))
 	included := make([]contentItem, 0, len(items))
 	for _, item := range items {
-		if item.StatsPage {
+		if item.SuppressStats || item.ListPage || item.Section == "" {
 			continue
 		}
 		included = append(included, item)
@@ -1124,6 +1145,10 @@ func makeContentStats(items []contentItem) contentStats {
 		section.Posts++
 		section.Words += item.Words
 		stats.Sections[item.Section] = section
+		if len(item.Categories) > 0 && strings.TrimSpace(item.Categories[0]) != "" {
+			category := strings.TrimSpace(item.Categories[0])
+			stats.Categories[category]++
+		}
 		for _, tag := range item.Tags {
 			stats.Tags[tag]++
 		}
@@ -1172,6 +1197,26 @@ func writeContentStatsSummary(out io.Writer, stats contentStats) error {
 }
 
 func writeContentStats(project, output string, draft bool, stats contentStats) error {
+	if err := writeContentStatsData(project, stats); err != nil {
+		return err
+	}
+	sources, err := contentSources(project)
+	if err != nil {
+		return err
+	}
+	pagePath := filepath.Join(sources[0].path, filepath.FromSlash(output+".md"))
+	if _, err := os.Stat(pagePath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(pagePath, []byte(statsPageSource(draft)), 0644)
+}
+
+func writeContentStatsData(project string, stats contentStats) error {
 	dataPath := filepath.Join(project, "data", "site-stats.json")
 	if err := os.MkdirAll(filepath.Dir(dataPath), 0755); err != nil {
 		return err
@@ -1183,16 +1228,213 @@ func writeContentStats(project, output string, draft bool, stats contentStats) e
 	if err := os.WriteFile(dataPath, append(data, '\n'), 0644); err != nil {
 		return err
 	}
-	sources, err := contentSources(project)
-	if err != nil {
-		return err
+	return nil
+}
+
+func statsPageSource(draft bool) string {
+	return fmt.Sprintf("---\ntitle: \"The CEO Playbook in Numbers\"\ndate: %s\nsummary: \"A living record of the ideas, operating principles, and strategic work shaping how I think about technology, innovation, and executive leadership.\"\ndescription: \"A living record of the ideas, operating principles, and strategic work shaping how I think about technology, innovation, and executive leadership.\"\ntags: []\ndraft: %t\nhsSuppressStats: true\nshowTableOfContents: true\nshowDate: false\nshowReadingTime: false\nshowWordCount: false\nsharingLinks: false\n---\n\n{{< site-stats section=\"overview\" >}}\n\n## Content by category\n\n{{< site-stats section=\"category\" >}}\n\n## Publishing by section\n\n{{< site-stats section=\"section\" >}}\n\n## Publishing over time\n\n{{< site-stats section=\"time\" >}}\n\n## Most discussed topics\n\n{{< site-stats section=\"topics\" >}}\n\n## Recent publishing\n\n{{< site-stats section=\"recent\" >}}\n", time.Now().UTC().Format(time.RFC3339), draft)
+}
+
+func renderStatsPage(stats contentStats, draft bool) string {
+	var page strings.Builder
+	page.WriteString("---\n")
+	page.WriteString("title: \"Site statistics\"\n")
+	page.WriteString(fmt.Sprintf("date: %s\n", stats.GeneratedAt.Format(time.RFC3339)))
+	page.WriteString("summary: \"A live view of the CEO Playbook's publishing output, subject mix, and cadence.\"\n")
+	page.WriteString("description: \"A live view of the CEO Playbook's publishing output, subject mix, and cadence.\"\n")
+	page.WriteString("tags: []\n")
+	page.WriteString(fmt.Sprintf("draft: %t\n", draft))
+	page.WriteString("hsSuppressStats: true\n")
+	page.WriteString("showDate: false\nshowReadingTime: false\nshowWordCount: false\nsharingLinks: false\n")
+	page.WriteString("---\n\n")
+	page.WriteString("{{< lead >}}\n")
+	page.WriteString("A live view of the ideas, analysis, and field notes published across the CEO Playbook.\n")
+	page.WriteString("{{< /lead >}}\n\n")
+
+	page.WriteString("{{< stats columns=\"4\" >}}\n")
+	page.WriteString(fmt.Sprintf("  {{< stat value=\"%s\" label=\"Published pages\" />}}\n", formatInteger(stats.Posts)))
+	page.WriteString(fmt.Sprintf("  {{< stat value=\"%s\" label=\"Words published\" />}}\n", formatInteger(stats.TotalWords)))
+	page.WriteString(fmt.Sprintf("  {{< stat value=\"%s\" label=\"Average words per page\" />}}\n", formatInteger(stats.AverageWords)))
+	page.WriteString(fmt.Sprintf("  {{< stat value=\"%s\" label=\"Publishing span\" />}}\n", publishingSpan(stats)))
+	page.WriteString("{{< /stats >}}\n\n")
+
+	page.WriteString("## Content by category\n\n")
+	page.WriteString("The category chart uses the first governed category on each page. Pages without a governed category are excluded from this view.\n\n")
+	if len(stats.Categories) > 0 {
+		categoryTotal := countRows(stats.Categories)
+		page.WriteString("{{< chart >}}\n")
+		page.WriteString(chartConfig("doughnut", sortedCountRows(stats.Categories), "Pages"))
+		page.WriteString("{{< /chart >}}\n\n")
+		page.WriteString("| Category | Pages | Share |\n| --- | ---: | ---: |\n")
+		for _, row := range sortedCountRows(stats.Categories) {
+			page.WriteString(fmt.Sprintf("| %s | %s | %.1f%% |\n", markdownCell(row.Name), formatInteger(row.Count), percentage(row.Count, categoryTotal)))
+		}
+		page.WriteString("\n")
+	} else {
+		page.WriteString("No categorized content yet.\n\n")
 	}
-	pagePath := filepath.Join(sources[0].path, filepath.FromSlash(output), "_index.md")
-	if err := os.MkdirAll(filepath.Dir(pagePath), 0755); err != nil {
-		return err
+
+	page.WriteString("## Publishing by section\n\n")
+	page.WriteString("| Section | Pages | Words |\n| --- | ---: | ---: |\n")
+	for _, row := range sortedSectionRows(stats.Sections) {
+		name := row.Name
+		if name == "" {
+			name = "Top-level pages"
+		}
+		page.WriteString(fmt.Sprintf("| %s | %s | %s |\n", markdownCell(name), formatInteger(row.Posts), formatInteger(row.Words)))
 	}
-	page := fmt.Sprintf("---\ntitle: \"Site statistics\"\ndraft: %t\nhs_stats: true\nlayout: \"site-stats\"\n---\n\nThis page is powered by `data/site-stats.json`. Add a `layouts/_default/site-stats.html` layout to render the dashboard.\n", draft)
-	return os.WriteFile(pagePath, []byte(page), 0644)
+	page.WriteString("\n")
+
+	page.WriteString("## Publishing over time\n\n")
+	if len(stats.Years) > 0 {
+		page.WriteString("{{< chart >}}\n")
+		page.WriteString(chartConfig("bar", sortedYearRows(stats.Years), "Pages published"))
+		page.WriteString("{{< /chart >}}\n\n")
+	} else {
+		page.WriteString("No dated content yet.\n\n")
+	}
+
+	page.WriteString("## Most discussed topics\n\n")
+	if len(stats.Tags) > 0 {
+		for _, row := range firstCountRows(sortedCountRows(stats.Tags), 12) {
+			page.WriteString(fmt.Sprintf("- **%s**: %d pages\n", markdownCell(row.Name), row.Count))
+		}
+		page.WriteString("\n")
+	} else {
+		page.WriteString("No tags yet.\n\n")
+	}
+
+	page.WriteString("## Recent publishing\n\n")
+	for _, item := range stats.Recent {
+		date := "Undated"
+		if !item.Date.IsZero() {
+			date = item.Date.Format("2 Jan 2006")
+		}
+		page.WriteString(fmt.Sprintf("- [%s](%s), %s, %s words\n", markdownCell(item.Title), item.URL, date, formatInteger(item.Words)))
+	}
+	if len(stats.Recent) == 0 {
+		page.WriteString("No published content yet.\n")
+	}
+	page.WriteString("\n")
+	page.WriteString(fmt.Sprintf("_Statistics calculated %s._\n", stats.GeneratedAt.Format("2 January 2006, 15:04 MST")))
+	return page.String()
+}
+
+type statsCountRow struct {
+	Name  string
+	Count int
+}
+
+type statsSectionRow struct {
+	Name  string
+	Posts int
+	Words int
+}
+
+func sortedCountRows(values map[string]int) []statsCountRow {
+	rows := make([]statsCountRow, 0, len(values))
+	for name, count := range values {
+		rows = append(rows, statsCountRow{Name: name, Count: count})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Count == rows[j].Count {
+			return rows[i].Name < rows[j].Name
+		}
+		return rows[i].Count > rows[j].Count
+	})
+	return rows
+}
+
+func sortedSectionRows(values map[string]contentStatBucket) []statsSectionRow {
+	rows := make([]statsSectionRow, 0, len(values))
+	for name, bucket := range values {
+		rows = append(rows, statsSectionRow{Name: name, Posts: bucket.Posts, Words: bucket.Words})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Posts == rows[j].Posts {
+			return rows[i].Name < rows[j].Name
+		}
+		return rows[i].Posts > rows[j].Posts
+	})
+	return rows
+}
+
+func sortedYearRows(values map[string]contentStatBucket) []statsCountRow {
+	rows := make([]statsCountRow, 0, len(values))
+	for year, bucket := range values {
+		rows = append(rows, statsCountRow{Name: year, Count: bucket.Posts})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
+	return rows
+}
+
+func firstCountRows(rows []statsCountRow, count int) []statsCountRow {
+	if len(rows) <= count {
+		return rows
+	}
+	return rows[:count]
+}
+
+func chartConfig(chartType string, rows []statsCountRow, label string) string {
+	labels := make([]string, 0, len(rows))
+	values := make([]int, 0, len(rows))
+	for _, row := range rows {
+		labels = append(labels, row.Name)
+		values = append(values, row.Count)
+	}
+	encodedLabels, _ := json.Marshal(labels)
+	encodedValues, _ := json.Marshal(values)
+	background := ""
+	if chartType == "doughnut" {
+		colors := []string{"#0f766e", "#2563eb", "#c2410c", "#7c3aed", "#be123c", "#15803d", "#a16207", "#475569"}
+		encodedColors, _ := json.Marshal(colors[:min(len(colors), len(rows))])
+		background = fmt.Sprintf(",\n    backgroundColor: %s", encodedColors)
+		return fmt.Sprintf("type: 'doughnut',\ndata: {\n  labels: %s,\n  datasets: [{\n    label: '%s',\n    data: %s%s\n  }]\n},\nplugins: [{\n  id: 'percentageLabels',\n  afterDatasetDraw(chart) {\n    const dataset = chart.data.datasets[0];\n    const total = dataset.data.reduce((sum, value) => sum + value, 0);\n    const ctx = chart.ctx;\n    const dark = document.documentElement.classList.contains('dark');\n    ctx.save();\n    ctx.fillStyle = dark ? '#f5f5f5' : '#17202a';\n    ctx.font = '700 12px system-ui, sans-serif';\n    ctx.textAlign = 'center';\n    ctx.textBaseline = 'middle';\n    chart.getDatasetMeta(0).data.forEach((arc, index) => {\n      const percentage = dataset.data[index] / total * 100;\n      if (percentage < 3) return;\n      const angle = (arc.startAngle + arc.endAngle) / 2;\n      const radius = (arc.innerRadius + arc.outerRadius) / 2;\n      ctx.fillText(percentage.toFixed(1) + '%%', arc.x + Math.cos(angle) * radius, arc.y + Math.sin(angle) * radius);\n    });\n    ctx.restore();\n  }\n}],\noptions: {\n  responsive: true,\n  plugins: {\n    legend: { position: 'bottom' }\n  }\n}\n", encodedLabels, label, encodedValues, background)
+	}
+	return fmt.Sprintf("type: '%s',\ndata: {\n  labels: %s,\n  datasets: [{\n    label: '%s',\n    data: %s\n  }]\n},\noptions: {\n  responsive: true,\n  plugins: {\n    legend: { position: 'bottom' }\n  }\n}\n", chartType, encodedLabels, label, encodedValues)
+}
+
+func publishingSpan(stats contentStats) string {
+	if stats.FirstPublished == "" || stats.LatestPublished == "" {
+		return "0 years"
+	}
+	first, firstErr := time.Parse("2006-01-02", stats.FirstPublished)
+	latest, latestErr := time.Parse("2006-01-02", stats.LatestPublished)
+	if firstErr != nil || latestErr != nil || latest.Before(first) {
+		return "0 years"
+	}
+	return fmt.Sprintf("%d years", latest.Year()-first.Year()+1)
+}
+
+func percentage(value, total int) float64 {
+	if total == 0 {
+		return 0
+	}
+	return float64(value) * 100 / float64(total)
+}
+
+func countRows(values map[string]int) int {
+	total := 0
+	for _, value := range values {
+		total += value
+	}
+	return total
+}
+
+func formatInteger(value int) string {
+	text := strconv.Itoa(value)
+	start := 0
+	if strings.HasPrefix(text, "-") {
+		start = 1
+	}
+	for position := len(text) - 3; position > start; position -= 3 {
+		text = text[:position] + "," + text[position:]
+	}
+	return text
+}
+
+func markdownCell(value string) string {
+	return strings.NewReplacer("|", "\\|", "\n", " ", "\r", " ").Replace(value)
 }
 
 func summarizePosts(posts []post) postSummary {
@@ -1214,14 +1456,15 @@ func summarizePosts(posts []post) postSummary {
 	if summary.Count > 0 {
 		summary.AverageWords = summary.TotalWords / summary.Count
 	}
-	last := time.Time{}
+	dated := make([]time.Time, 0, summary.DatedPosts)
 	for _, post := range posts {
 		if !post.Date.IsZero() {
-			if !last.IsZero() {
-				total += post.Date.Sub(last)
-			}
-			last = post.Date
+			dated = append(dated, post.Date)
 		}
+	}
+	sort.Slice(dated, func(i, j int) bool { return dated[i].Before(dated[j]) })
+	for i := 1; i < len(dated); i++ {
+		total += dated[i].Sub(dated[i-1])
 	}
 	if summary.DatedPosts > 1 {
 		summary.AverageInterval = formatDuration(total / time.Duration(summary.DatedPosts-1))

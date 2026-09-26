@@ -58,7 +58,7 @@ Run `gofmt` on every edited Go file and finish with `git diff --check`.
 - `content list` reports local source content, including drafts.
 - `content search` is for text matching. Filters belong on `content list` when no text query is required.
 - Generated page paths and front-matter `url` overrides are distinct. The TUI's `u` action deliberately displays the configured Hugo `baseURL` plus the generated content path, not an arbitrary front-matter override.
-- Generated statistics pages (`hs_stats: true`) are omitted from aggregate content statistics.
+- Pages marked `hsSuppressStats: true` are omitted from aggregate content statistics.
 
 ## TUI conventions
 
@@ -76,4 +76,3 @@ The TUI is invoked with `hs tui [project-directory]` and uses Bubble Tea. Keep i
 - Do not use destructive Git commands such as `git reset --hard` or `git checkout --` to clean a worktree.
 - Avoid adding dependencies unless the behavior cannot be delivered cleanly with the standard library or existing modules. If a dependency is added, run `go mod tidy` and keep `go.mod`/`go.sum` in sync.
 - Update `README.md` when user-facing commands or key bindings change. Update `docs/roadmap.md` only when project status or planned scope changes.
-

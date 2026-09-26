@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSearchRanksTitleAndRequiresAllTerms(t *testing.T) {
@@ -186,8 +187,10 @@ func TestPostsDefaultsToSummary(t *testing.T) {
 
 func TestContentListSearchStatsAndWrite(t *testing.T) {
 	site := t.TempDir()
-	writePost(t, filepath.Join(site, "content", "articles", "one.md"), "---\ntitle: Fintech note\ndate: 2026-01-01\ntags: [Fintech]\ndraft: false\n---\none two three")
+	writePost(t, filepath.Join(site, "content", "articles", "one.md"), "---\ntitle: Fintech note\ndate: 2026-01-01\ncategories: [Fintech]\ntags: [Fintech]\ndraft: false\n---\none two three")
 	writePost(t, filepath.Join(site, "content", "research", "two.md"), "---\ntitle: Research note\ndate: 2026-01-11\ntags: [Open Finance]\ndraft: true\n---\nfour five")
+	writePost(t, filepath.Join(site, "content", "articles", "_index.md"), "---\ntitle: Articles\n---\nsection description")
+	writePost(t, filepath.Join(site, "content", "about.md"), "---\ntitle: About\ndate: 2026-01-05\ndraft: false\n---\ntop-level page")
 	var list bytes.Buffer
 	if err := run([]string{"content", "list", site, "--format", "json"}, &list, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
@@ -230,13 +233,64 @@ func TestContentListSearchStatsAndWrite(t *testing.T) {
 	if !strings.Contains(string(data), `"sections"`) {
 		t.Fatalf("data = %s", data)
 	}
-	page, err := os.ReadFile(filepath.Join(site, "content", "private", "site-stats", "_index.md"))
+	if !strings.Contains(string(data), `"Fintech": 1`) || !strings.Contains(string(data), `"site_url": "/articles/one/"`) || strings.Contains(string(data), `"Uncategorized"`) {
+		t.Fatalf("category data = %s", data)
+	}
+	page, err := os.ReadFile(filepath.Join(site, "content", "private", "site-stats.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(page), "draft: true") || !strings.Contains(string(page), "hs_stats: true") {
+	if !strings.Contains(string(page), "draft: true") || !strings.Contains(string(page), "hsSuppressStats: true") {
 		t.Fatalf("page = %s", page)
 	}
+	if !strings.Contains(string(page), "{{< site-stats section=\"overview\" >}}") || !strings.Contains(string(page), "## Content by category") || strings.Contains(string(page), "Published pages") || strings.Contains(string(page), "{{< chart >}}") {
+		t.Fatalf("generated stats page = %s", page)
+	}
+	if strings.Contains(string(data), `"Uncategorized"`) {
+		t.Fatalf("uncategorized category should be excluded = %s", data)
+	}
+	var publishedStats bytes.Buffer
+	if err := run([]string{"content", "stats", site}, &publishedStats, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(publishedStats.String(), "Posts: 1") {
+		t.Fatalf("draft content should be excluded by default: %s", publishedStats.String())
+	}
+	if err := run([]string{"content", "stats", site, "--write", "--draft", "--output", "private/site-stats"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	pageAgain, err := os.ReadFile(filepath.Join(site, "content", "private", "site-stats.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(pageAgain) != string(page) {
+		t.Fatalf("existing generated page was rewritten:\n%s", pageAgain)
+	}
+	if err := run([]string{"content", "stats", site, "--data-only", "--output", "private/data-only"}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(site, "content", "private", "data-only.md")); !os.IsNotExist(err) {
+		t.Fatalf("data-only stats should not create a page, err=%v", err)
+	}
+}
+
+func TestSummarizePostsUsesChronologicalIntervals(t *testing.T) {
+	summary := summarizePosts([]post{
+		{Date: mustParseTestDate(t, "2026-01-11")},
+		{Date: mustParseTestDate(t, "2026-01-01")},
+	})
+	if summary.AverageInterval != "10 days" {
+		t.Fatalf("average interval = %q", summary.AverageInterval)
+	}
+}
+
+func mustParseTestDate(t *testing.T, value string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
 }
 
 func TestTUIContentFilterAndProjectParsing(t *testing.T) {
@@ -257,7 +311,7 @@ func TestTUIContentFilterAndProjectParsing(t *testing.T) {
 	if items := m.filteredItems(); len(items) != 1 || items[0].Title != "Published" {
 		t.Fatalf("published items = %#v", items)
 	}
-	if view := m.contentView(); !strings.Contains(view, "Posts: 1 | Words: 1 | Avg: 1 words/post") || !strings.Contains(view, "1 words  Published") {
+	if view := m.contentView(); !strings.Contains(view, "Posts: 0 | Words: 0 | Avg: 0 words/post") || !strings.Contains(view, "1 words  Published") {
 		t.Fatalf("content stats = %s", view)
 	}
 	m.draftFilter = 0
