@@ -1268,7 +1268,7 @@ func renderStatsPage(stats contentStats, draft bool) string {
 		page.WriteString("{{< /chart >}}\n\n")
 		page.WriteString("| Category | Pages | Share |\n| --- | ---: | ---: |\n")
 		for _, row := range sortedCountRows(stats.Categories) {
-			page.WriteString(fmt.Sprintf("| %s | %s | %.1f%% |\n", markdownCell(row.Name), formatInteger(row.Count), percentage(row.Count, categoryTotal)))
+			_, _ = fmt.Fprintf(&page, "| %s | %s | %.1f%% |\n", markdownCell(row.Name), formatInteger(row.Count), percentage(row.Count, categoryTotal))
 		}
 		page.WriteString("\n")
 	} else {
@@ -1282,7 +1282,7 @@ func renderStatsPage(stats contentStats, draft bool) string {
 		if name == "" {
 			name = "Top-level pages"
 		}
-		page.WriteString(fmt.Sprintf("| %s | %s | %s |\n", markdownCell(name), formatInteger(row.Posts), formatInteger(row.Words)))
+		_, _ = fmt.Fprintf(&page, "| %s | %s | %s |\n", markdownCell(name), formatInteger(row.Posts), formatInteger(row.Words))
 	}
 	page.WriteString("\n")
 
@@ -1298,7 +1298,7 @@ func renderStatsPage(stats contentStats, draft bool) string {
 	page.WriteString("## Most discussed topics\n\n")
 	if len(stats.Tags) > 0 {
 		for _, row := range firstCountRows(sortedCountRows(stats.Tags), 12) {
-			page.WriteString(fmt.Sprintf("- **%s**: %d pages\n", markdownCell(row.Name), row.Count))
+			_, _ = fmt.Fprintf(&page, "- **%s**: %d pages\n", markdownCell(row.Name), row.Count)
 		}
 		page.WriteString("\n")
 	} else {
@@ -1311,13 +1311,13 @@ func renderStatsPage(stats contentStats, draft bool) string {
 		if !item.Date.IsZero() {
 			date = item.Date.Format("2 Jan 2006")
 		}
-		page.WriteString(fmt.Sprintf("- [%s](%s), %s, %s words\n", markdownCell(item.Title), item.URL, date, formatInteger(item.Words)))
+		_, _ = fmt.Fprintf(&page, "- [%s](%s), %s, %s words\n", markdownCell(item.Title), item.URL, date, formatInteger(item.Words))
 	}
 	if len(stats.Recent) == 0 {
 		page.WriteString("No published content yet.\n")
 	}
 	page.WriteString("\n")
-	page.WriteString(fmt.Sprintf("_Statistics calculated %s._\n", stats.GeneratedAt.Format("2 January 2006, 15:04 MST")))
+	_, _ = fmt.Fprintf(&page, "_Statistics calculated %s._\n", stats.GeneratedAt.Format("2 January 2006, 15:04 MST"))
 	return page.String()
 }
 
