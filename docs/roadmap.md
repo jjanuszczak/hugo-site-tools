@@ -36,6 +36,7 @@ Build these before adding deployment integrations. They solve day-to-day Hugo pr
 | `hs audit links [dir]` | Check local content links and generated internal links. External checks remain opt-in. | Delivered |
 | `hs search index [dir]` | Generate, validate, inspect, and query the local `index.json` search index. | Medium |
 | `hs related <content-file>` | Recommend related content from taxonomy and text similarity. | Medium |
+| `hs content epub <content-file>` | Export one Markdown post as an EPUB with front matter metadata, a bundle cover, stylesheet support, and `.hs.toml` text replacements. | Delivered |
 | `hs redirects [dir]` | Generate redirect rules for moved URLs in Netlify, Cloudflare, Nginx, and Apache formats. | Medium |
 | `hs campaign` | Create and validate strict GA4-compatible UTM links for local Hugo content, including a TUI workflow for selected content. | Medium |
 

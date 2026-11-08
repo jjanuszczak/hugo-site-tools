@@ -32,6 +32,7 @@ const (
 	tuiCampaignInspect
 	tuiCampaignAdd
 	tuiCampaignRetire
+	tuiEPUBPath
 	tuiResult
 )
 
@@ -90,6 +91,7 @@ const (
 	tuiCampaignKeyInput
 	tuiCampaignLabelInput
 	tuiCampaignDescriptionInput
+	tuiEPUBPathInput
 )
 
 type tuiCommandResult struct {
@@ -164,6 +166,8 @@ type tuiModel struct {
 	selectedURL        string
 	urlNote            string
 	campaignItem       contentItem
+	epubItem           contentItem
+	epubOutput         string
 	campaignPolicy     campaignPolicy
 	campaignField      int
 	campaignKey        string
@@ -368,6 +372,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateCampaignRetire(key)
 		case tuiResult:
 			return m.updateResult(key)
+		case tuiEPUBPath:
+			return m.updateEPUBPath(key)
 		}
 	}
 	return m, nil
@@ -451,6 +457,13 @@ func (m tuiModel) updateContent(key string) (tea.Model, tea.Cmd) {
 		if len(items) > 0 && m.remoteURL == "" {
 			m.openCampaign(items[m.contentCursor])
 		}
+	case "e":
+		if len(items) > 0 && m.remoteURL == "" && isMarkdownContentPath(items[m.contentCursor].Source) {
+			m.epubItem = items[m.contentCursor]
+			m.epubOutput = ""
+			m.input = tuiEPUBPathInput
+			m.screen = tuiEPUBPath
+		}
 	case "u":
 		if len(items) > 0 {
 			m.showContentURL(items[m.contentCursor])
@@ -467,6 +480,11 @@ func (m tuiModel) updateContent(key string) (tea.Model, tea.Cmd) {
 		m.screen = tuiMenu
 	}
 	return m, nil
+}
+
+func isMarkdownContentPath(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return ext == ".md" || ext == ".markdown"
 }
 
 func (m *tuiModel) openCampaign(item contentItem) {
@@ -762,6 +780,27 @@ func (m tuiModel) updateURL(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m tuiModel) updateEPUBPath(key string) (tea.Model, tea.Cmd) {
+	if m.input == tuiEPUBPathInput && key != "enter" && key != "esc" {
+		m.updateInput(key)
+		m.input = tuiEPUBPathInput
+		return m, nil
+	}
+	switch key {
+	case "enter":
+		m.input = tuiNoInput
+		args := []string{"content", "epub", m.epubItem.Source, m.project}
+		if strings.TrimSpace(m.epubOutput) != "" {
+			args = append(args, "--output", strings.TrimSpace(m.epubOutput))
+		}
+		return m, m.startAction(args)
+	case "esc", "backspace":
+		m.input = tuiNoInput
+		m.screen = tuiContent
+	}
+	return m, nil
+}
+
 func (m tuiModel) updateFilters(key string) (tea.Model, tea.Cmd) {
 	if m.input != tuiNoInput {
 		m.updateInput(key)
@@ -883,6 +922,8 @@ func (m tuiModel) inputValue() string {
 		return m.campaignDraftLabel
 	case tuiCampaignDescriptionInput:
 		return m.campaignDraftDesc
+	case tuiEPUBPathInput:
+		return m.epubOutput
 	}
 	return ""
 }
@@ -909,6 +950,8 @@ func (m *tuiModel) setInputValue(value string) {
 		m.campaignDraftLabel = value
 	case tuiCampaignDescriptionInput:
 		m.campaignDraftDesc = value
+	case tuiEPUBPathInput:
+		m.epubOutput = value
 	}
 }
 
@@ -1324,6 +1367,8 @@ func (m tuiModel) View() string {
 		return m.campaignAddView()
 	case tuiCampaignRetire:
 		return m.campaignRetireView()
+	case tuiEPUBPath:
+		return m.epubPathView()
 	case tuiResult:
 		return m.resultView()
 	default:
@@ -1368,7 +1413,7 @@ func (m tuiModel) contentView() string {
 	if m.remoteURL != "" {
 		view.WriteString("/ search • f filters • c clear • ↑/↓ select • PgUp/PgDn scroll • Enter details • d remote doctor • u URL • r refresh • Esc back\n\n")
 	} else {
-		view.WriteString("/ search • f filters • c clear • ↑/↓ select • PgUp/PgDn scroll • Enter view • d doctor • l campaign link • u URL • r refresh • Esc back\n\n")
+		view.WriteString("/ search • f filters • c clear • ↑/↓ select • PgUp/PgDn scroll • Enter view • d doctor • e EPUB • l campaign link • u URL • r refresh • Esc back\n\n")
 	}
 	if m.err != nil {
 		fmt.Fprintf(&view, "Could not read content: %v\n", m.err)
@@ -1452,6 +1497,14 @@ func (m tuiModel) previewDisplayLines() []string {
 
 func (m tuiModel) urlView() string {
 	return fmt.Sprintf("Post URL\n\n%s\n\n%s\nCopy the URL, then press Enter or Esc to return.\n", m.selectedURL, m.urlNote)
+}
+
+func (m tuiModel) epubPathView() string {
+	value := m.epubOutput
+	if m.input == tuiEPUBPathInput {
+		value += "█"
+	}
+	return fmt.Sprintf("Export %q as an EPUB\n\nOutput path (relative to the project, blank for a title-based default):\n\n%s\n\nEnter export • Esc cancel", m.epubItem.Title, value)
 }
 
 func (m tuiModel) campaignView() string {
