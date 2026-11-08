@@ -77,6 +77,32 @@ hs content stats . --write --draft --output private/site-stats
 
 `posts` reads YAML, TOML, and JSON front matter. `content list` includes draft state, word count, and generated path; its JSON output also includes each source path. `--draft true|false` narrows the list without requiring a search query. `content search` accepts section, tag, draft, and date-range filters. All content commands understand the project's configured `contentDir` and content-targeted Hugo module mounts. `content stats --write` creates `data/site-stats.json` and a draft generated-page stub by default.
 
+Export one local Markdown post as an EPUB with Pandoc 3.0 or later installed on `PATH`:
+
+```sh
+hs content epub content/articles/example.md .
+hs content epub content/articles/example.md . --output private/example.epub --css book.css
+```
+
+Front matter supplies the book title, subtitle, author, date, description, and language. The date remains in EPUB package metadata but is omitted from the visible title page. EPUB metadata also accepts `copyright` or `rights`, `publisher`, `identifier` or `isbn`, `subject` or `categories`, `keywords` or `tags`, `contributor`, and `series`. Copyright appears in the visible EPUB title page and is stored as EPUB rights metadata. To add a cover, place `cover.png` or `cover.jpg` beside the post's `index.md` in its page bundle. If neither file exists, the EPUB has no cover image. For most e-readers, use portrait artwork around 1600 × 2560 pixels (width × height), in RGB. Referenced local images are packaged by Pandoc. Hugo shortcode tags are stripped from the EPUB input by default, while text between paired shortcode tags is retained. The default EPUB uses a built-in readable stylesheet; `--css` embeds a custom stylesheet. The default output is a title-based `.epub` beside the post. Existing output files are never overwritten.
+
+Pandoc converts Markdown footnotes (`[^1]`) to linked EPUB notes, which reading apps may show as pop-ups and omit from the normal reading flow. Footnote definitions (`[^1]: ...`) are not a visible bibliography under a `References` heading. Use a standard ordered list for a bibliography, with links such as `[IMF](https://example.com)`. Each footnote definition must be referenced in the body and separated from adjacent definitions by a blank line. Write headings as `## References`, without bold markers around the heading syntax. The default stylesheet renders footnote reference numbers as small superscripts. If you use `--css`, include an `a.footnote-ref` rule to preserve that styling.
+
+Optional literal replacements live in the project's `.hs.toml`. `[[epub.replacements]]` creates the `epub` table automatically; you can also add an explicit `[epub]` header before the rules. Rules match case-sensitively, run in listed order, and affect EPUB exports only. `scope` can be `body` (the default) or `title`; `format = "markdown"` lets body replacements add Markdown formatting such as bold. By default, replacement values are treated as plain text.
+
+```toml
+[[epub.replacements]]
+find = "CONFIDENTIAL DRAFT"
+replace = ""
+scope = "body"
+
+[[epub.replacements]]
+find = "important phrase"
+replace = "**important phrase**"
+scope = "body"
+format = "markdown"
+```
+
 ### Use the interactive terminal UI
 
 `hs tui [site-directory]` opens an arrow-key interface for content work and release checks. The content browser shows the active result-set statistics, per-article word counts, and filters for draft state, section, category, tag, and date range.
@@ -91,11 +117,12 @@ hs content stats . --write --draft --output private/site-stats
 | `f` / `c` | Open filters / clear search and filters. |
 | `Enter` | Read the selected Markdown source, including front matter. |
 | `d` | Run the content doctor against the selected source file only. |
+| `e` | Export the selected local Markdown post as an EPUB. Enter an output path or leave it blank for the title-based default. |
 | `l` | Create a GA4 campaign link for the selected local content item. |
 | `u` | Show the selected post's URL, built from Hugo's `baseURL` and generated path. |
 | `r` | Refresh local content. |
 | `Esc` | Return to the previous screen. |
-| `q` | Quit, except while typing a search or filter value. |
+| `q` | Quit, except while typing a search, filter, or EPUB output path. |
 
 In the filter screen, use left/right to choose known sections, categories, and tags, or Enter to type an exact value. Date filters use `YYYY-MM-DD`.
 

@@ -702,7 +702,7 @@ type contentItem struct {
 
 func runContent(args []string, out io.Writer) error {
 	if len(args) == 0 || isHelp(args[0]) {
-		fmt.Fprintln(out, "Usage: hs content list [site-directory] [--draft true|false] [--format text|json]\n       hs content search <terms> [site-directory] [--section NAME] [--tag TAG] [--draft true|false] [--from DATE] [--to DATE]\n       hs content new <title> [site-directory] [--section NAME] [--tag TAG] [--draft] [--date DATE]\n       hs content stats [site-directory] [--write|--data-only] [--draft] [--output PATH]")
+		fmt.Fprintln(out, "Usage: hs content list [site-directory] [--draft true|false] [--format text|json]\n       hs content search <terms> [site-directory] [--section NAME] [--tag TAG] [--draft true|false] [--from DATE] [--to DATE]\n       hs content new <title> [site-directory] [--section NAME] [--tag TAG] [--draft] [--date DATE]\n       hs content stats [site-directory] [--write|--data-only] [--draft] [--output PATH]\n       hs content epub <content-file> [site-directory] [--output PATH] [--css PATH]")
 		return nil
 	}
 	switch args[0] {
@@ -714,6 +714,8 @@ func runContent(args []string, out io.Writer) error {
 		return runContentNew(args[1:], out)
 	case "stats":
 		return runContentStats(args[1:], out)
+	case "epub":
+		return runContentEPUB(args[1:], out)
 	default:
 		return fmt.Errorf("unknown content command %q", args[0])
 	}
@@ -3370,5 +3372,5 @@ func oneLine(s string, max int) string {
 	return s
 }
 func printUsage(out io.Writer) {
-	fmt.Fprintln(out, "hs searches and audits Hugo sites.\n\nUsage:\n  hs site set <base-url>\n  hs site show\n  hs search <terms...> [--limit N] [--json]\n  hs posts [site-directory] [--verbose]\n  hs content <list|search|new|stats> ...\n  hs campaign <init|list|add|edit|retire|link|validate> ...\n  hs tui [project-directory] [--relative-paths] | hs tui --remote <base-url> [--relative-paths] | hs tui --repo <github-url> [--ref REF] [--subdir PATH] [--relative-paths]\n  hs web [project-directory] [--relative-paths] | hs web --repo <github-url> [--ref REF] [--subdir PATH] [--port PORT] [--relative-paths]\n  hs build [project-directory] [--build-drafts] [--build-future] [--format text|json]\n  hs urls [project-directory] [--format text|json] [--compare snapshot.json]\n  hs audit <seo|links> [project-directory] [--remote URL] [--strict] [--format text|json|sarif]\n  hs doctor [project-directory] [--remote URL] [--max-pages N] [--timeout SECONDS] [--only checks] [--source content-file] [--strict] [--format text|json|sarif]")
+	fmt.Fprintln(out, "hs searches and audits Hugo sites.\n\nUsage:\n  hs site set <base-url>\n  hs site show\n  hs search <terms...> [--limit N] [--json]\n  hs posts [site-directory] [--verbose]\n  hs content <list|search|new|stats|epub> ...\n  hs campaign <init|list|add|edit|retire|link|validate> ...\n  hs tui [project-directory] [--relative-paths] | hs tui --remote <base-url> [--relative-paths] | hs tui --repo <github-url> [--ref REF] [--subdir PATH] [--relative-paths]\n  hs web [project-directory] [--relative-paths] | hs web --repo <github-url> [--ref REF] [--subdir PATH] [--port PORT] [--relative-paths]\n  hs build [project-directory] [--build-drafts] [--build-future] [--format text|json]\n  hs urls [project-directory] [--format text|json] [--compare snapshot.json]\n  hs audit <seo|links> [project-directory] [--remote URL] [--strict] [--format text|json|sarif]\n  hs doctor [project-directory] [--remote URL] [--max-pages N] [--timeout SECONDS] [--only checks] [--source content-file] [--strict] [--format text|json|sarif]")
 }
