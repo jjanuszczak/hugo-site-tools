@@ -139,11 +139,11 @@ func exportPostEPUB(opts epubOptions) (string, error) {
 		}
 	}
 	if item == nil {
-		return "", fmt.Errorf("Markdown content file was not found: %s", opts.source)
+		return "", fmt.Errorf("markdown content file was not found: %s", opts.source)
 	}
 	sourcePath := filepath.Join(opts.project, filepath.FromSlash(item.Source))
 	if ext := strings.ToLower(filepath.Ext(sourcePath)); ext != ".md" && ext != ".markdown" {
-		return "", errors.New("EPUB export supports Markdown content files only")
+		return "", errors.New("epub export supports Markdown content files only")
 	}
 	data, err := os.ReadFile(sourcePath)
 	if err != nil {
@@ -160,7 +160,7 @@ func exportPostEPUB(opts epubOptions) (string, error) {
 	}
 	title = applyEPUBReplacements(title, settings.Replacements, "title")
 	if strings.TrimSpace(title) == "" {
-		return "", errors.New("EPUB title is empty after applying replacement rules")
+		return "", errors.New("epub title is empty after applying replacement rules")
 	}
 	body = hugoShortcode.ReplaceAllString(body, "")
 	body = applyEPUBReplacements(body, settings.Replacements, "body")
@@ -178,7 +178,7 @@ func exportPostEPUB(opts epubOptions) (string, error) {
 	}
 	publicDir, _ := filepath.Abs(filepath.Join(opts.project, "public"))
 	if output == publicDir || strings.HasPrefix(output, publicDir+string(filepath.Separator)) {
-		return "", errors.New("EPUB output cannot be written inside the Hugo public/ directory")
+		return "", errors.New("epub output cannot be written inside the Hugo public/ directory")
 	}
 	if _, err = os.Stat(output); err == nil {
 		return "", fmt.Errorf("output already exists: %s", output)
@@ -260,7 +260,7 @@ func exportPostEPUB(opts epubOptions) (string, error) {
 		if message == "" {
 			message = err.Error()
 		}
-		return "", fmt.Errorf("Pandoc EPUB conversion failed: %s", message)
+		return "", fmt.Errorf("pandoc EPUB conversion failed: %s", message)
 	}
 	if err := os.Rename(tempPath, output); err != nil {
 		return "", fmt.Errorf("could not write EPUB %s: %w", output, err)
